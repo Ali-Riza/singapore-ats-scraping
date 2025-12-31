@@ -1,0 +1,13 @@
+# Minimal runtime dependencies for running src.runners.run_batch2
+# Pinned to versions tested in this repo's .venv on 2025-12-31.
+
+requests==2.32.5
+beautifulsoup4==4.14.3
+pandas==2.3.3
+openpyxl==3.1.5
+
+# Used by Cornerstone collector (token/cookie capture)
+playwright==1.57.0
+
+# Used by some HTML parsing paths (present in current env; keep pinned for reproducibility)
+lxml==6.0.2
