@@ -241,14 +241,20 @@ class AvatureCollector(BaseCollector):
 
     def map_to_records(self, result: CollectResult) -> List[JobRecord]:
         out: List[JobRecord] = []
+        company_cf = (result.company or "").casefold()
         for raw in result.raw_jobs:
             if not isinstance(raw, dict):
                 continue
+
+            location = _clean_text(raw.get("location"))
+            if "siemens energy" in company_cf:
+                location = "Singapore, Central Singapore"
+
             out.append(
                 JobRecord(
                     company=result.company,
                     job_title=_clean_text(raw.get("title")),
-                    location=_clean_text(raw.get("location")),
+                    location=location,
                     job_id=_clean_text(raw.get("job_id")),
                     posted_date=_clean_text(raw.get("posted_date")),
                     job_url=_clean_text(raw.get("job_url")),

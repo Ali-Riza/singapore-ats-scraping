@@ -20,9 +20,26 @@ def _base_from_url(url: str) -> str:
     return f"{u.scheme}://{u.netloc}".rstrip("/")
 
 
-def _looks_singapore(*vals: str) -> bool:
+def _countries_from_item(item: Dict[str, Any]) -> list[str]:
+    countries = item.get("Countries") if isinstance(item.get("Countries"), list) else []
+    names = []
+    for c in countries:
+        if not isinstance(c, dict):
+            continue
+        name = _clean_text(c.get("Name"))
+        if name:
+            names.append(name.lower())
+    return names
+
+
+def _looks_singapore(item: Dict[str, Any], *vals: str) -> bool:
+    # Prefer explicit Countries[].Name when present (matches tests/bmt.py behavior).
+    country_names = _countries_from_item(item)
+    if any(name == "singapore" or name == "sg" for name in country_names):
+        return True
+
     hay = " ".join([v or "" for v in vals]).lower()
-    return "singapore" in hay or "\bsg\b" in hay
+    return "singapore" in hay or " sg " in f" {hay} "
 
 
 def _api_url_for_country(base: str, country: str) -> str:
@@ -39,20 +56,47 @@ class UmbracoApiCollector(BaseCollector):
 
     def collect_raw(self, company: CompanyItem) -> CollectResult:
         raw_jobs: List[Dict[str, Any]] = []
-        meta: Dict[str, Any] = {"status": None, "api_url": None}
+        meta: Dict[str, Any] = {"status": None, "api_url": None, "host_base": None}
 
         try:
-            base = _base_from_url(company.careers_url)
-            api_base_url = base + "/umbraco/api/v1/vacancies/"
+            host_base = _base_from_url(company.careers_url)
+            api_base_url = host_base + "/umbraco/api/v1/vacancies/"
             api_url = _api_url_for_country(api_base_url, "singapore")
             meta["api_url"] = api_url
+            meta["host_base"] = host_base
 
-            r = requests.get(api_url, timeout=30, headers={"Accept": "application/json,text/plain,*/*"})
-            meta["status"] = r.status_code
-            r.raise_for_status()
-            data = r.json()
+            headers = {"Accept": "application/json,text/plain,*/*"}
 
-            items = data if isinstance(data, list) else []
+            items: List[Dict[str, Any]] = []
+
+            # First try country-segment endpoint (usually works). If it fails or is empty, fallback to full list + filter.
+            try:
+                r = requests.get(api_url, timeout=30, headers=headers)
+                meta["status"] = r.status_code
+                r.raise_for_status()
+                data = r.json()
+                items = data if isinstance(data, list) else []
+            except Exception as exc:
+                meta["error_country"] = str(exc)
+
+            if not items:
+                r_all = requests.get(api_base_url, timeout=30, headers=headers)
+                meta["status_all"] = r_all.status_code
+                r_all.raise_for_status()
+                data_all = r_all.json()
+                all_items = data_all if isinstance(data_all, list) else []
+                items = [it for it in all_items if isinstance(it, dict)]
+
+                # Client-side filter for Singapore
+                filtered: List[Dict[str, Any]] = []
+                for it in items:
+                    title = _clean_text(it.get("Name") or it.get("title"))
+                    location = _clean_text(it.get("Location") or it.get("location"))
+                    url = _clean_text(it.get("Url") or it.get("url") or it.get("jobUrl") or "")
+                    if not _looks_singapore(it, title, location, url):
+                        continue
+                    filtered.append(it)
+                items = filtered
 
             for j in items:
                 if not isinstance(j, dict):
@@ -61,10 +105,10 @@ class UmbracoApiCollector(BaseCollector):
                 location = _clean_text(j.get("Location") or j.get("location"))
                 url = _clean_text(j.get("Url") or j.get("url") or j.get("jobUrl") or "")
                 if url and url.startswith("/"):
-                    url = base + url
+                    url = host_base + url
 
                 # The endpoint is already country-filtered; keep a defensive filter anyway.
-                if not _looks_singapore(title, location, url):
+                if not _looks_singapore(j, title, location, url):
                     continue
                 raw_jobs.append(j)
 

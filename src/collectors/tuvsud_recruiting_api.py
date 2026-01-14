@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import math
 import re
+from datetime import datetime, timezone
+from html import unescape as html_unescape
 from typing import Any, Dict, List
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -49,6 +51,125 @@ def _origin_from_url(url: str) -> str:
 def _looks_singapore(s: str) -> bool:
     t = (s or "").casefold()
     return "singapore" in t or t.strip() in ("sg",)
+
+
+def _value_to_str(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, dict):
+        for k in ("value", "label", "text", "name", "title"):
+            if k in v:
+                s = _value_to_str(v.get(k))
+                if s:
+                    return s
+        return ""
+    if isinstance(v, list) and v:
+        return _value_to_str(v[0])
+    return ""
+
+
+def _pick_str(raw: Dict[str, Any], keys: List[str]) -> str:
+    for k in keys:
+        if k in raw:
+            s = _clean_text(_value_to_str(raw.get(k)))
+            if s:
+                return s
+    return ""
+
+
+def _extract_date_str(v: Any) -> str:
+    if v is None:
+        return ""
+
+    if isinstance(v, dict):
+        for k in ("value", "date", "iso", "raw", "text"):
+            if k in v:
+                s = _extract_date_str(v.get(k))
+                if s:
+                    return s
+        return ""
+
+    if isinstance(v, (int, float)):
+        ts = float(v)
+        if ts > 10_000_000_000:  # likely ms
+            ts = ts / 1000.0
+        try:
+            return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+        except Exception:
+            return ""
+
+    s = _clean_text(_value_to_str(v))
+    if not s:
+        return ""
+
+    # Formats seen in TÜV SÜD payload: e.g. "11/7/25" or "2/27/26"
+    if re.fullmatch(r"\d{1,2}/\d{1,2}/\d{2}", s):
+        try:
+            dt = datetime.strptime(s, "%m/%d/%y")
+            return dt.date().isoformat()
+        except Exception:
+            pass
+    if re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}", s):
+        try:
+            dt = datetime.strptime(s, "%m/%d/%Y")
+            return dt.date().isoformat()
+        except Exception:
+            pass
+
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", s)
+    if m:
+        return m.group(1)
+
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%d",
+    ):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return dt.date().isoformat()
+        except Exception:
+            continue
+
+    return ""
+
+
+def _pick_date(raw: Dict[str, Any], keys: List[str]) -> str:
+    for k in keys:
+        if k in raw:
+            d = _extract_date_str(raw.get(k))
+            if d:
+                return d
+    return ""
+
+
+def _build_tuvsud_detail_url(*, origin: str, raw: Dict[str, Any], job_id: str) -> str:
+    # Observed working format (user-provided):
+    # https://jobs.tuvsud.com/job/Failure-Analysis-Consultant/2342-en_US
+    if not origin or not job_id:
+        return ""
+
+    slug = _pick_str(raw, ["unifiedUrlTitle", "urlTitle", "jobUrlTitle"])
+    if not slug:
+        return ""
+
+    # Normalize entities (&amp;) but preserve existing percent-escapes (%2C, %28, ...)
+    slug = html_unescape(slug)
+    slug_encoded = quote(slug, safe="-%_().,%")
+
+    locale = "en_US"
+    supported = raw.get("supportedLocales")
+    if isinstance(supported, list) and supported:
+        cand = _clean_text(_value_to_str(supported[0]))
+        if cand:
+            locale = cand
+
+    return urljoin(origin.rstrip("/") + "/", f"job/{slug_encoded}/{job_id}-{locale}")
 
 
 class TuvSudRecruitingApiCollector(BaseCollector):
@@ -158,13 +279,57 @@ class TuvSudRecruitingApiCollector(BaseCollector):
             if not isinstance(raw, dict):
                 continue
 
-            job_id = _clean_text(raw.get("jobId") or raw.get("jobSeqNo") or raw.get("id"))
-            title = _clean_text(raw.get("jobTitle") or raw.get("title") or raw.get("postingTitle"))
-            posted = _clean_text(raw.get("postingStartDate") or raw.get("postedDate") or raw.get("postingDate"))
+            job_id = _pick_str(
+                raw,
+                [
+                    "jobId",
+                    "jobSeqNo",
+                    "jobReqId",
+                    "jobRequisitionId",
+                    "requisitionId",
+                    "jobPostingId",
+                    "postingId",
+                    "id",
+                ],
+            )
+            title = _pick_str(
+                raw,
+                [
+                    "jobTitle",
+                    "postingTitle",
+                    "jobPostingTitle",
+                    "positionTitle",
+                    "unifiedStandardTitle",
+                    "title",
+                    "name",
+                ],
+            )
+            posted = _pick_date(
+                raw,
+                [
+                    "postingStartDate",
+                    "postedDate",
+                    "postingDate",
+                    "datePosted",
+                    "postedOn",
+                    "createdAt",
+                    "unifiedStandardStart",
+                ],
+            )
 
-            location = _clean_text(raw.get("jobLocation") or raw.get("location") or "")
+            location = _pick_str(
+                raw,
+                [
+                    "jobLocation",
+                    "jobLocationDisplay",
+                    "location",
+                    "jobLocationCity",
+                    "jobLocationShort",
+                    "jobLocationShortWithCoordinates",
+                ],
+            )
             if not location:
-                country = _clean_text(raw.get("jobLocationCountry") or raw.get("country") or "Singapore")
+                country = _pick_str(raw, ["jobLocationCountry", "country"]) or "Singapore"
                 location = country
 
             if not _looks_singapore(location):
@@ -181,7 +346,7 @@ class TuvSudRecruitingApiCollector(BaseCollector):
             if job_url and origin and job_url.startswith("/"):
                 job_url = urljoin(origin, job_url)
             if not job_url:
-                job_url = result.careers_url
+                job_url = _build_tuvsud_detail_url(origin=origin, raw=raw, job_id=job_id) or result.careers_url
 
             out.append(
                 JobRecord(

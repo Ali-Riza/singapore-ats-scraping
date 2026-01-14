@@ -1,8 +1,10 @@
 from __future__ import annotations # For forward compatibility with future Python versions
 
+import argparse
+import os
 from collections import Counter # For counting per-company jobs
 from concurrent.futures import ThreadPoolExecutor # For parallel collection of companies
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from src.io.loaders import load_companies # Load companies from Excel
 from src.collectors.registry import pick_collector # Pick collector based on company item
@@ -155,13 +157,43 @@ OUT_SITEFINITY_CSV = "data/output/sitefinity_jobs_batch2.csv"
 OUT_SITEFINITY_REPORT = "data/output/sitefinity_report_batch2.json"
 
 
-def main() -> None:
-    """ Main function to run batch collection for Oracle and Workday ATS."""
+# Run these ATS groups first (so you can validate new collectors quickly).
+# You can override via CLI: `--priority ats1,ats2`.
+DEFAULT_PRIORITY_ATS = [
+   # collector for applus
+   "carrier_html"
+   
+]
 
-    # 1) Load companies
-    items = load_companies(MASTER_INPUT)
 
-    # 2) Filter companies by ATS type
+@dataclass(frozen=True)
+class AtsGroup:
+    ats_name: str
+    companies: list
+    collector: object
+    out_csv: str
+    out_report: str
+
+
+def _parse_csv_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [p.strip() for p in value.split(",") if p.strip()]
+
+
+def _priority_order_key(ats_name: str, priority: list[str]) -> tuple[int, int]:
+    try:
+        return (0, priority.index(ats_name))
+    except ValueError:
+        return (1, 10_000)
+
+
+def _build_groups(
+    *,
+    items: list,
+) -> list[AtsGroup]:
+    """Build ATS groups (items + collector + output paths) in a stable default order."""
+
     oracle_items = [it for it in items if pick_collector(it) == "oracle"]
     workday_items = [it for it in items if pick_collector(it) == "workday"]
     phenom_items = [it for it in items if pick_collector(it) == "phenom"]
@@ -197,7 +229,6 @@ def main() -> None:
     aibel_html_hr_manager_items = [it for it in items if pick_collector(it) == "aibel_html_hr_manager"]
     sitefinity_items = [it for it in items if pick_collector(it) == "sitefinity"]
 
-    # Print loaded and selected counts
     print(hr())
     print(f"Loaded total: {len(items)}")
     print(hr())
@@ -236,14 +267,13 @@ def main() -> None:
     print(f"Sitefinity selected: {len(sitefinity_items)}")
     print(hr())
 
-  
     if oracle_items:
         print("Oracle companies:", [c.company for c in oracle_items])
         print(hr())
     else:
         print("No oracle companies selected. Check ATS_Type in Excel + loader mapping.")
         print(hr())
-    
+
     if workday_items:
         print("Workday companies:", [c.company for c in workday_items])
         print(hr())
@@ -314,371 +344,338 @@ def main() -> None:
         print("No htmlpagedsearch companies selected. Check ATS_Type in Excel + loader mapping.")
         print(hr())
 
-    if oracle_items:
-        run_one_ats(
+    if jobsyn_solr_items:
+        print("JobsynSolr companies:", [c.company for c in jobsyn_solr_items])
+        print(hr())
+    else:
+        print("No jobsyn_solr companies selected. Check ATS_Type in Excel + loader mapping.")
+        print(hr())
+
+    if avature_items:
+        print("Avature companies:", [c.company for c in avature_items])
+        print(hr())
+    else:
+        print("No avature companies selected. Check ATS_Type in Excel + loader mapping.")
+        print(hr())
+
+    groups: list[AtsGroup] = [
+        AtsGroup(
             ats_name="oracle",
             companies=oracle_items,
             collector=OracleCollector(),
-            items_total=len(items),
             out_csv=OUT_ORACLE_CSV,
             out_report=OUT_ORACLE_REPORT,
-        )
-
-    if workday_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="workday",
             companies=workday_items,
             collector=WorkdayCollector(),
-            items_total=len(items),
             out_csv=OUT_WORKDAY_CSV,
             out_report=OUT_WORKDAY_REPORT,
-        )
-
-    if phenom_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="phenom",
             companies=phenom_items,
             collector=PhenomCollector(),
-            items_total=len(items),
             out_csv=OUT_PHENOM_CSV,
             out_report=OUT_PHENOM_REPORT,
-        )
-
-    if successfactors_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="successfactors",
             companies=successfactors_items,
             collector=SuccessFactorsCollector(),
-            items_total=len(items),
             out_csv=OUT_SUCCESSFACTORS_CSV,
             out_report=OUT_SUCCESSFACTORS_REPORT,
-        )
-
-    if tribepad_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="tribepad",
             companies=tribepad_items,
             collector=TribepadCollector(),
-            items_total=len(items),
             out_csv=OUT_TRIBEPAD_CSV,
             out_report=OUT_TRIBEPAD_REPORT,
-        )
-
-    if eightfold_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="eightfold",
             companies=eightfold_items,
             collector=EightfoldCollector(),
-            items_total=len(items),
             out_csv=OUT_EIGHTFOLD_CSV,
             out_report=OUT_EIGHTFOLD_REPORT,
-        )
-
-    if algolia_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="algolia",
             companies=algolia_items,
             collector=AlgoliaCollector(),
-            items_total=len(items),
             out_csv=OUT_ALGOLIA_CSV,
             out_report=OUT_ALGOLIA_REPORT,
-        )
-
-    if cornerstone_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="cornerstone",
             companies=cornerstone_items,
             collector=CornerstoneCollector(),
-            items_total=len(items),
             out_csv=OUT_CORNERSTONE_CSV,
             out_report=OUT_CORNERSTONE_REPORT,
-        )
-
-    if embeddedstate_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="embeddedstate",
             companies=embeddedstate_items,
             collector=EmbeddedStateCollector(),
-            items_total=len(items),
             out_csv=OUT_EMBEDDEDSTATE_CSV,
             out_report=OUT_EMBEDDEDSTATE_REPORT,
-        )
-
-    if jibe_api_jobs_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="jibe_api_jobs",
             companies=jibe_api_jobs_items,
             collector=JibeApiJobsCollector(),
-            items_total=len(items),
             out_csv=OUT_JIBE_API_JOBS_CSV,
             out_report=OUT_JIBE_API_JOBS_REPORT,
-        )
-
-    if htmlpagedsearch_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="htmlpagedsearch",
             companies=htmlpagedsearch_items,
             collector=HtmlPagedSearchCollector(),
-            items_total=len(items),
             out_csv=OUT_HTMLPAGEDSEARCH_CSV,
             out_report=OUT_HTMLPAGEDSEARCH_REPORT,
-        )
-
-    if hibob_items:
-        run_one_ats(
+        ),
+        # Batch2 expansion collectors
+        AtsGroup(
             ats_name="hibob",
             companies=hibob_items,
             collector=HibobCollector(),
-            items_total=len(items),
             out_csv=OUT_HIBOB_CSV,
             out_report=OUT_HIBOB_REPORT,
-        )
-
-    if jobsyn_solr_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="jobsyn_solr",
             companies=jobsyn_solr_items,
             collector=JobsynSolrCollector(),
-            items_total=len(items),
             out_csv=OUT_JOBSYNC_SOLR_CSV,
             out_report=OUT_JOBSYNC_SOLR_REPORT,
-        )
-
-    if avature_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="avature",
             companies=avature_items,
             collector=AvatureCollector(),
-            items_total=len(items),
             out_csv=OUT_AVATURE_CSV,
             out_report=OUT_AVATURE_REPORT,
-        )
-
-    if breezy_portal_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="breezy_portal",
             companies=breezy_portal_items,
             collector=BreezyPortalCollector(),
-            items_total=len(items),
             out_csv=OUT_BREEZY_PORTAL_CSV,
             out_report=OUT_BREEZY_PORTAL_REPORT,
-        )
-
-    if umbraco_api_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="umbraco_api",
             companies=umbraco_api_items,
             collector=UmbracoApiCollector(),
-            items_total=len(items),
             out_csv=OUT_UMBRACO_API_CSV,
             out_report=OUT_UMBRACO_API_REPORT,
-        )
-
-    if mycareersfuture_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="mycareersfuture",
             companies=mycareersfuture_items,
             collector=MyCareersFutureCollector(),
-            items_total=len(items),
             out_csv=OUT_MYCAREERSFUTURE_CSV,
             out_report=OUT_MYCAREERSFUTURE_REPORT,
-        )
-
-    if tuvsud_recruiting_api_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="tuvsud_recruiting_api",
             companies=tuvsud_recruiting_api_items,
             collector=TuvSudRecruitingApiCollector(),
-            items_total=len(items),
             out_csv=OUT_TUVSUD_RECRUITING_API_CSV,
             out_report=OUT_TUVSUD_RECRUITING_API_REPORT,
-        )
-
-    if milchundzucker_gjb_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="milchundzucker_gjb",
             companies=milchundzucker_gjb_items,
             collector=MilchUndZuckerGjbCollector(),
-            items_total=len(items),
             out_csv=OUT_MILCHUNDZUCKER_GJB_CSV,
             out_report=OUT_MILCHUNDZUCKER_GJB_REPORT,
-        )
-
-    if clinch_careers_site_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="clinch_careers_site",
             companies=clinch_careers_site_items,
             collector=ClinchCareersSiteCollector(),
-            items_total=len(items),
             out_csv=OUT_CLINCH_CAREERS_SITE_CSV,
             out_report=OUT_CLINCH_CAREERS_SITE_REPORT,
-        )
-
-    if kentico_html_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="kentico_html",
             companies=kentico_html_items,
             collector=KenticoHtmlCollector(),
-            items_total=len(items),
             out_csv=OUT_KENTICO_HTML_CSV,
             out_report=OUT_KENTICO_HTML_REPORT,
-        )
-
-    if wordpress_inline_modals_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="wordpress_inline_modals",
             companies=wordpress_inline_modals_items,
             collector=WordpressInlineModalsCollector(),
-            items_total=len(items),
             out_csv=OUT_WORDPRESS_INLINE_MODALS_CSV,
             out_report=OUT_WORDPRESS_INLINE_MODALS_REPORT,
-        )
-
-    if wordpress_elementor_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="wordpress_elementor",
             companies=wordpress_elementor_items,
             collector=WordpressElementorCollector(),
-            items_total=len(items),
             out_csv=OUT_WORDPRESS_ELEMENTOR_CSV,
             out_report=OUT_WORDPRESS_ELEMENTOR_REPORT,
-        )
-
-    if wordpress_remix_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="wordpress_remix",
             companies=wordpress_remix_items,
             collector=WordpressRemixCollector(),
-            items_total=len(items),
             out_csv=OUT_WORDPRESS_REMIX_CSV,
             out_report=OUT_WORDPRESS_REMIX_REPORT,
-        )
-
-    if magnolia_nextjs_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="magnolia_nextjs",
             companies=magnolia_nextjs_items,
             collector=MagnoliaNextJsCollector(),
-            items_total=len(items),
             out_csv=OUT_MAGNOLIA_NEXTJS_CSV,
             out_report=OUT_MAGNOLIA_NEXTJS_REPORT,
-        )
-
-    if krohne_nextjs_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="krohne_nextjs",
             companies=krohne_nextjs_items,
             collector=KrohneNextJsCollector(),
-            items_total=len(items),
             out_csv=OUT_KROHNE_NEXTJS_CSV,
             out_report=OUT_KROHNE_NEXTJS_REPORT,
-        )
-
-    if kongsberg_optimizely_easycruit_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="kongsberg_optimizely_easycruit",
             companies=kongsberg_optimizely_easycruit_items,
             collector=KongsbergOptimizelyEasycruitCollector(),
-            items_total=len(items),
             out_csv=OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_CSV,
             out_report=OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_REPORT,
-        )
-
-    if lr_episerver_api_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="lr_episerver_api",
             companies=lr_episerver_api_items,
             collector=LrEpiserverApiCollector(),
-            items_total=len(items),
             out_csv=OUT_LR_EPISERVER_API_CSV,
             out_report=OUT_LR_EPISERVER_API_REPORT,
-        )
-
-    if aem_workday_json_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="aem_workday_json",
             companies=aem_workday_json_items,
             collector=AemWorkdayJsonCollector(),
-            items_total=len(items),
             out_csv=OUT_AEM_WORKDAY_JSON_CSV,
             out_report=OUT_AEM_WORKDAY_JSON_REPORT,
-        )
-
-    if carrier_html_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="carrier_html",
             companies=carrier_html_items,
             collector=CarrierHtmlCollector(),
-            items_total=len(items),
             out_csv=OUT_CARRIER_HTML_CSV,
             out_report=OUT_CARRIER_HTML_REPORT,
-        )
-
-    if classnk_static_html_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="classnk_static_html",
             companies=classnk_static_html_items,
             collector=ClassNkStaticHtmlCollector(),
-            items_total=len(items),
             out_csv=OUT_CLASSNK_STATIC_HTML_CSV,
             out_report=OUT_CLASSNK_STATIC_HTML_REPORT,
-        )
-
-    if aibel_html_hr_manager_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="aibel_html_hr_manager",
             companies=aibel_html_hr_manager_items,
             collector=AibelHtmlHrManagerCollector(),
-            items_total=len(items),
             out_csv=OUT_AIBEL_HTML_HR_MANAGER_CSV,
             out_report=OUT_AIBEL_HTML_HR_MANAGER_REPORT,
-        )
-
-    if sitefinity_items:
-        run_one_ats(
+        ),
+        AtsGroup(
             ats_name="sitefinity",
             companies=sitefinity_items,
             collector=SitefinityCollector(),
-            items_total=len(items),
             out_csv=OUT_SITEFINITY_CSV,
             out_report=OUT_SITEFINITY_REPORT,
+        ),
+    ]
+
+    return groups
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Main function to run batch collection for all supported ATS groups."""
+
+    parser = argparse.ArgumentParser(description="Run ATS batch collection (batch2).")
+    parser.add_argument(
+        "--only",
+        default=os.environ.get("ATS_ONLY"),
+        help="Comma-separated ATS names to run (e.g. jobsyn_solr,avature)",
+    )
+    parser.add_argument(
+        "--priority",
+        default=os.environ.get("ATS_PRIORITY"),
+        help="Comma-separated ATS names to run first (overrides default priority list)",
+    )
+    parser.add_argument(
+        "--stop-after-priority",
+        action="store_true",
+        default=(os.environ.get("ATS_STOP_AFTER_PRIORITY", "").strip().lower() in {"1", "true", "yes"}),
+        help="Run priority ATS groups first, then exit (skip the rest)",
+    )
+    parser.add_argument(
+        "--only-priority",
+        action="store_true",
+        default=(os.environ.get("ATS_ONLY_PRIORITY", "").strip().lower() in {"1", "true", "yes"}),
+        help="Run only priority ATS groups (skip everything else)",
+    )
+    args = parser.parse_args(argv)
+
+    only_set = set(_parse_csv_list(args.only)) if args.only else None
+
+    priority = _parse_csv_list(args.priority)
+    if not priority:
+        priority = DEFAULT_PRIORITY_ATS
+
+    # 1) Load companies
+    items = load_companies(MASTER_INPUT)
+
+    # 2) Build groups + print selection counts
+    groups = _build_groups(items=items)
+
+    # 3) Filter and order
+    if args.only_priority:
+        groups = [g for g in groups if g.ats_name in set(priority)]
+    elif only_set is not None:
+        groups = [g for g in groups if g.ats_name in only_set]
+
+    groups = [g for g in groups if g.companies]
+    if not groups:
+        raise RuntimeError(
+            "No supported ATS companies found (check ats_new_norm in Excel + registry mappings)"
         )
 
-    if (
-        not oracle_items
-        and not workday_items
-        and not phenom_items
-        and not successfactors_items
-        and not tribepad_items
-        and not eightfold_items
-        and not algolia_items
-        and not cornerstone_items
-        and not embeddedstate_items
-        and not jibe_api_jobs_items
-        and not htmlpagedsearch_items
-        and not hibob_items
-        and not jobsyn_solr_items
-        and not avature_items
-        and not breezy_portal_items
-        and not umbraco_api_items
-        and not mycareersfuture_items
-        and not tuvsud_recruiting_api_items
-        and not milchundzucker_gjb_items
-        and not clinch_careers_site_items
-        and not kentico_html_items
-        and not wordpress_inline_modals_items
-        and not wordpress_elementor_items
-        and not wordpress_remix_items
-        and not magnolia_nextjs_items
-        and not krohne_nextjs_items
-        and not kongsberg_optimizely_easycruit_items
-        and not lr_episerver_api_items
-        and not aem_workday_json_items
-        and not carrier_html_items
-        and not classnk_static_html_items
-        and not aibel_html_hr_manager_items
-        and not sitefinity_items
-    ):
+    # Stable order, but priority ATS groups first.
+    groups_sorted = sorted(groups, key=lambda g: _priority_order_key(g.ats_name, priority))
+
+    print("Run order:", [g.ats_name for g in groups_sorted])
+    print(hr())
+
+    # 4) Execute
+    ran_any = False
+    for group in groups_sorted:
+        run_one_ats(
+            ats_name=group.ats_name,
+            companies=group.companies,
+            collector=group.collector,
+            items_total=len(items),
+            out_csv=group.out_csv,
+            out_report=group.out_report,
+        )
+        ran_any = True
+
+        if args.stop_after_priority and group.ats_name in set(priority):
+            # If next group is not priority, stop.
+            next_idx = groups_sorted.index(group) + 1
+            if next_idx < len(groups_sorted) and groups_sorted[next_idx].ats_name not in set(priority):
+                print("Stopping after priority ATS groups.")
+                print(hr())
+                return
+
+    if not ran_any:
         raise RuntimeError(
             "No supported ATS companies found (check ats_new_norm in Excel + registry mappings)"
         )

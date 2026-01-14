@@ -15,6 +15,9 @@ def normalize_records(records: List[JobRecord]) -> List[JobRecord]:
     
     # Process each record
     for r in records:
+        norm_posted_date = _norm_date(r.posted_date)
+        if not norm_posted_date:
+            norm_posted_date = "NONE"
         normalized_records.append(
             replace(
                 r,
@@ -22,7 +25,7 @@ def normalize_records(records: List[JobRecord]) -> List[JobRecord]:
                 job_title=_s(r.job_title),
                 location=_norm_location(r.location),
                 job_id=_s(r.job_id),
-                posted_date=_norm_date(r.posted_date),
+                posted_date=norm_posted_date,
                 job_url=_s(r.job_url),
                 source=_s(r.source),
                 careers_url=_s(r.careers_url),

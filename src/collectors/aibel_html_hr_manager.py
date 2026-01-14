@@ -129,6 +129,7 @@ class AibelHtmlHrManagerCollector(BaseCollector):
             )
 
     def map_to_records(self, result: CollectResult) -> List[JobRecord]:
+        # Only include jobs with 'Singapore' in the location (case-insensitive)
         return [
             JobRecord(
                 company=result.company,
@@ -142,5 +143,5 @@ class AibelHtmlHrManagerCollector(BaseCollector):
                 raw=raw,
             )
             for raw in result.raw_jobs
-            if isinstance(raw, dict)
+            if isinstance(raw, dict) and "singapore" in _clean_text(raw.get("location")).lower()
         ]

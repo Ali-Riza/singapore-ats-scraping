@@ -157,7 +157,12 @@ class KenticoHtmlCollector(BaseCollector):
             soup = BeautifulSoup(detail_html, "html.parser")
 
             h1 = soup.select_one("h1")
-            title = _clean_text(h1.get_text(" ", strip=True)) if h1 else _clean_text(raw.get("listing_title"))
+            title = _clean_text(h1.get_text(" ", strip=True)) if h1 else ""
+            if not title:
+                h2 = soup.select_one("h2")
+                title = _clean_text(h2.get_text(" ", strip=True)) if h2 else ""
+            if not title:
+                title = _clean_text(raw.get("listing_title"))
 
             location = _extract_location_from_detail(soup)
             job_id = _slug_from_url(job_url)

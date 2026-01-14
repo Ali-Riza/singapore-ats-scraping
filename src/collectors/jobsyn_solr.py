@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -109,6 +110,24 @@ def _base_from_careers_url(careers_url: str) -> str:
     if not u.scheme or not u.netloc:
         return careers_url.rstrip("/")
     return f"{u.scheme}://{u.netloc}".rstrip("/")
+
+
+def _slugify_for_path(text: str) -> str:
+    s = _clean_text(text).casefold()
+    # Keep it simple and robust for known patterns like "Singapore, SGP" -> "singapore-sgp"
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s
+
+
+def _jobsyn_canonical_careers_url(company_name: str, careers_url: str) -> str:
+    # Hardcoded per user request (Cummins + Flowserve)
+    name_cf = (company_name or "").casefold()
+    if "cummins" in name_cf:
+        return "https://cummins.jobs/jobs/?location=singapore"
+    if "flowserve" in name_cf:
+        return "https://flowservecareers.com/jobs/?location=Singapore,+SGP"
+    return careers_url
 
 
 def _headers_for_site(careers_url: str) -> Dict[str, str]:
@@ -245,6 +264,10 @@ def _extract_job_url(job: Dict[str, Any], careers_url: str) -> str:
             "canonical_url_s",
             "seo_url",
             "seoUrl",
+            # Jobsyn/NLX variants
+            "job_url_exact",
+            "apply_url_exact",
+            "detail_url_exact",
         ],
         "",
     )
@@ -253,6 +276,41 @@ def _extract_job_url(job: Dict[str, Any], careers_url: str) -> str:
         if u.startswith("/"):
             return _base_from_careers_url(careers_url) + u
         return u
+
+    # Fallback: many Jobsyn/NLX payloads provide `title_slug` + `guid` but no URL.
+    slug = _pick(job, ["title_slug", "titleSlug"], "")
+    if not slug:
+        slug = _extract_title(job)
+
+    guid = _pick(job, ["guid", "job_guid", "jobGuid"], "")
+
+    if not guid:
+        job_id = _extract_job_id(job)
+        # Often: id = "seo.joblisting.<GUID>"
+        if job_id and "." in job_id:
+            guid = job_id.split(".")[-1]
+
+    slug = _clean_text(slug)
+    guid = _clean_text(guid)
+    base = _base_from_careers_url(careers_url)
+
+    # Cummins/Flowserve pattern (confirmed by user examples):
+    # https://<host>/<location-slug>/<title-slug>/<guid>/job/
+    host = (urlparse(base).netloc or "").casefold()
+    if host in ("cummins.jobs", "flowservecareers.com"):
+        loc = _format_location(job)
+        loc_slug = _slugify_for_path(loc)
+        title_slug = _slugify_for_path(slug)
+        if loc_slug and title_slug and guid:
+            return f"{base}/{loc_slug}/{title_slug}/{guid}/job/"
+        if title_slug and guid:
+            return f"{base}/{title_slug}/{guid}/job/"
+
+    if slug and guid:
+        return f"{base}/job/{slug}/{guid}"
+    if guid:
+        return f"{base}/job/{guid}"
+
     return ""
 
 
@@ -268,6 +326,10 @@ class JobsynSolrCollector(BaseCollector):
         max_pages = 200
 
         try:
+            canonical_careers_url = _jobsyn_canonical_careers_url(company.company, company.careers_url)
+            meta["input_careers_url"] = company.careers_url
+            meta["canonical_careers_url"] = canonical_careers_url
+
             with requests.Session() as session:
                 session.headers.update(_headers_for_site(company.careers_url))
 
@@ -301,7 +363,7 @@ class JobsynSolrCollector(BaseCollector):
             return CollectResult(
                 collector=self.name,
                 company=company.company,
-                careers_url=company.careers_url,
+                careers_url=canonical_careers_url,
                 raw_jobs=raw_jobs,
                 meta=meta,
                 error=None,
@@ -310,7 +372,7 @@ class JobsynSolrCollector(BaseCollector):
             return CollectResult(
                 collector=self.name,
                 company=company.company,
-                careers_url=company.careers_url,
+                careers_url=_jobsyn_canonical_careers_url(company.company, company.careers_url),
                 raw_jobs=raw_jobs,
                 meta=meta,
                 error=str(e),
