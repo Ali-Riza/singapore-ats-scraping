@@ -2,6 +2,7 @@ from __future__ import annotations # For forward compatibility with future Pytho
 
 from collections import Counter # For counting per-company jobs
 from concurrent.futures import ThreadPoolExecutor # For parallel collection of companies
+from dataclasses import replace
 
 from src.io.loaders import load_companies # Load companies from Excel
 from src.collectors.registry import pick_collector # Pick collector based on company item
@@ -29,11 +30,11 @@ from src.utils.cli import hr
 # Constants for input/output paths
 MASTER_INPUT = "data/input/master_companies_with_fingerprint.xlsx"
 
-OUT_ORACLE_CSV = "data/output/oracle_jobs_batch1.csv"
-OUT_ORACLE_REPORT = "data/output/oracle_report_batch1.json"
+OUT_ORACLE_CSV = "data/output/oracle_jobs_batch2.csv"
+OUT_ORACLE_REPORT = "data/output/oracle_report_batch2.json"
 
-OUT_WORKDAY_CSV = "data/output/workday_jobs_batch1.csv"
-OUT_WORKDAY_REPORT = "data/output/workday_report_batch1.json"
+OUT_WORKDAY_CSV = "data/output/workday_jobs_batch2.csv"
+OUT_WORKDAY_REPORT = "data/output/workday_report_batch2.json"
 
 OUT_PHENOM_CSV = "data/output/phenom_jobs_batch2.csv"
 OUT_PHENOM_REPORT = "data/output/phenom_report_batch2.json"
@@ -350,7 +351,13 @@ def _collect_and_map(company, collector):
     res = collector.collect_raw(company)
     if res.error:
         return None
-    return collector.map_to_records(res)
+    records = collector.map_to_records(res)
+    # Always take company name from input (Excel) instead of any scraped/ATS-provided company field.
+    input_company = (getattr(company, "company", None) or "").strip()
+    if not input_company:
+        return records
+    return [replace(r, company=input_company) for r in records]
 
 if __name__ == "__main__":
     main()
+

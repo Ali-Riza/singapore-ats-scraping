@@ -57,6 +57,9 @@ Operational constraints
 python -m pip install -r requirements.txt
 python -m playwright install chromium
 python -m src.runners.run_batch2
+
+# Optional: merge all batch2 CSV outputs into one Excel file
+python -m src.runners.merge_batch2_to_xlsx
 ```
 
 ## Page 2 – Internal Core Model

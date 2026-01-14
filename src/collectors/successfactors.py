@@ -189,7 +189,35 @@ def _should_keep_company_job(company_name: str, job_url: str, location: str) -> 
     if c in {"yinson production"}:
         return ("singapore" in loc) or ("/singapore" in u) or ("singapore-" in u)
 
+    # These tenants sometimes ignore or mis-handle URL filters. Keep SG only.
+    if c in {"sulzer", "endress+hauser", "rina"}:
+        return ("singapore" in loc) or ("/singapore" in u) or ("singapore-" in u)
+
     return True
+
+
+def _canonical_listing_url(company: CompanyItem) -> Optional[str]:
+    """Return a stable server-rendered listing URL for tenants where the
+    Excel-provided URL can hide the results table (common when adding location=singapore).
+
+    This keeps changes narrowly scoped to the companies we have working test scripts for.
+    """
+    c = (company.company or "").strip().casefold()
+    u = urlparse(company.careers_url)
+    if not u.scheme or not u.netloc:
+        return None
+    base = f"{u.scheme}://{u.netloc}"
+
+    if c == "sulzer":
+        return f"{base}/search/?q=&sortColumn=referencedate&sortDirection=desc"
+
+    if c == "rina":
+        return f"{base}/search/?q=&sortColumn=referencedate&sortDirection=desc"
+
+    if c == "endress+hauser":
+        return f"{base}/other-countries/search/?q=&sortColumn=referencedate&sortDirection=desc"
+
+    return None
 
 
 @dataclass(frozen=True)
@@ -340,69 +368,107 @@ class SuccessFactorsCollector(BaseCollector):
                 }
             )
 
-            visited: Set[str] = set()
-            to_visit: List[str] = [company.careers_url]
+            attempted_starts: List[str] = []
 
-            # Track jobs by URL to avoid duplicates across pagination.
-            seen_job_urls: Set[str] = set()
+            def _crawl_from(start_url: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+                local_raw: List[Dict[str, Any]] = []
+                local_meta: Dict[str, Any] = {
+                    "pages": 0,
+                    "visited_urls": [],
+                    "status_codes": [],
+                    "pagination_urls_found": 0,
+                }
 
-            pages = 0
-            while to_visit and pages < max_pages:
-                url = to_visit.pop(0)
-                url, _frag = urldefrag(url)
-                if url in visited:
-                    continue
-                visited.add(url)
+                visited: Set[str] = set()
+                to_visit: List[str] = [start_url]
+                seen_job_urls: Set[str] = set()
 
-                r = session.get(url, timeout=30)
-                meta["status_codes"].append(r.status_code)
-                r.raise_for_status()
+                pages = 0
+                while to_visit and pages < max_pages:
+                    url = to_visit.pop(0)
+                    url, _frag = urldefrag(url)
+                    if url in visited:
+                        continue
+                    visited.add(url)
 
-                html = r.text
-                meta["visited_urls"].append(url)
-                meta["pages"] += 1
-                pages += 1
+                    r = session.get(url, timeout=30)
+                    local_meta["status_codes"].append(r.status_code)
+                    r.raise_for_status()
 
-                listing_jobs = _parse_listing_page(html, url)
+                    html = r.text
+                    local_meta["visited_urls"].append(url)
+                    local_meta["pages"] += 1
+                    pages += 1
 
-                # Fallback for non-table templates (e.g., Yinson): extract job detail URLs.
-                if not listing_jobs:
-                    for job_url in _extract_job_urls_from_search_html(html, url):
-                        if job_url in seen_job_urls:
+                    listing_jobs = _parse_listing_page(html, url)
+
+                    # Fallback for non-table templates: extract job detail URLs.
+                    if not listing_jobs:
+                        for job_url in _extract_job_urls_from_search_html(html, url):
+                            if job_url in seen_job_urls:
+                                continue
+                            seen_job_urls.add(job_url)
+                            local_raw.append(
+                                {
+                                    "title": "",
+                                    "job_url": job_url,
+                                    "location": "",
+                                    "posted_date": "",
+                                    "_page_url": url,
+                                }
+                            )
+
+                    # Add newly discovered pagination links
+                    for next_url in _discover_pagination_urls(html, url):
+                        if next_url not in visited:
+                            to_visit.append(next_url)
+
+                    # Parse jobs and store as raw dicts
+                    for j in listing_jobs:
+                        if j.job_url in seen_job_urls:
                             continue
-                        seen_job_urls.add(job_url)
-                        raw_jobs.append(
+                        seen_job_urls.add(j.job_url)
+                        local_raw.append(
                             {
-                                "title": "",
-                                "job_url": job_url,
-                                "location": "",
-                                "posted_date": "",
+                                "title": j.title,
+                                "job_url": j.job_url,
+                                "location": j.location,
+                                "posted_date": j.posted_date,
                                 "_page_url": url,
                             }
                         )
 
-                # Add newly discovered pagination links
-                for next_url in _discover_pagination_urls(html, url):
-                    if next_url not in visited:
-                        to_visit.append(next_url)
+                local_meta["pagination_urls_found"] = max(0, len(visited) - 1)
+                return local_raw, local_meta
 
-                # Parse jobs and store as raw dicts
-                for j in listing_jobs:
-                    if j.job_url in seen_job_urls:
-                        continue
-                    seen_job_urls.add(j.job_url)
+            starts: List[str] = [company.careers_url]
+            canon = _canonical_listing_url(company)
+            if canon and canon not in starts:
+                starts.append(canon)
 
-                    raw_jobs.append(
-                        {
-                            "title": j.title,
-                            "job_url": j.job_url,
-                            "location": j.location,
-                            "posted_date": j.posted_date,
-                            "_page_url": url,
-                        }
-                    )
+            # Crawl from the Excel URL first; if it yields 0 jobs, retry from canonical listing URL.
+            combined_status: List[int] = []
+            combined_visited: List[str] = []
+            combined_pages = 0
+            combined_pagination_found = 0
 
-            meta["pagination_urls_found"] = max(0, len(visited) - 1)
+            for start in starts:
+                attempted_starts.append(start)
+                local_raw, local_meta = _crawl_from(start)
+                combined_status.extend(list(local_meta.get("status_codes") or []))
+                combined_visited.extend(list(local_meta.get("visited_urls") or []))
+                combined_pages += int(local_meta.get("pages") or 0)
+                combined_pagination_found += int(local_meta.get("pagination_urls_found") or 0)
+
+                if local_raw:
+                    raw_jobs = local_raw
+                    break
+
+            meta["status_codes"] = combined_status
+            meta["visited_urls"] = combined_visited
+            meta["pages"] = combined_pages
+            meta["pagination_urls_found"] = combined_pagination_found
+            meta["attempted_start_urls"] = attempted_starts
 
             # Optional: for rows with missing posted_date, fetch detail pages best-effort.
             # Keep this bounded to avoid too many requests.

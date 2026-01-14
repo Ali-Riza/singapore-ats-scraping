@@ -2,6 +2,7 @@ from __future__ import annotations # For forward compatibility with future Pytho
 
 from collections import Counter # For counting per-company jobs
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait # For parallel collection of companies
+from dataclasses import replace
 
 from src.io.loaders import load_companies # Load companies from Excel
 from src.collectors.registry import pick_collector # Pick collector based on company item
@@ -181,7 +182,12 @@ def _collect_and_map(company, collector):
     res = collector.collect_raw(company)
     if res.error:
         return None
-    return collector.map_to_records(res)
+    records = collector.map_to_records(res)
+    # Always take company name from input (Excel) instead of any scraped/ATS-provided company field.
+    input_company = (getattr(company, "company", None) or "").strip()
+    if not input_company:
+        return records
+    return [replace(r, company=input_company) for r in records]
 
 if __name__ == "__main__":
     main()

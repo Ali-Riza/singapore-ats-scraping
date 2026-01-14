@@ -22,11 +22,29 @@ def _strip_www(host: str) -> str:
     return h[4:] if h.startswith("www.") else h
 
 
+def _strip_common_subdomain(host: str) -> str:
+    """Best-effort: PCS APIs typically want the corporate domain, not the careers subdomain.
+
+    Example: jobs.worley.com -> worley.com
+    """
+    h = _strip_www(host)
+    parts = [p for p in h.split(".") if p]
+    if len(parts) >= 3 and parts[0] in {"jobs", "careers", "career", "apply"}:
+        return ".".join(parts[1:])
+    return h
+
+
 def _domain_from_company(company: CompanyItem) -> str:
     """Eightfold requires a 'domain' query param (typically the corporate domain).
 
     For Eaton we get this from the Excel 'Website' column.
     """
+    # Allow overriding via careers_url query param if present.
+    q = parse_qs(urlparse(company.careers_url).query)
+    q_domain = q.get("domain", [None])[0]
+    if q_domain:
+        return _strip_www(str(q_domain))
+
     if company.website:
         u = urlparse(company.website)
         if u.netloc:
@@ -37,7 +55,7 @@ def _domain_from_company(company: CompanyItem) -> str:
             return _strip_www(u2.netloc)
 
     # Fallback: use careers host (may work for some tenants, but not guaranteed).
-    return _strip_www(urlparse(company.careers_url).netloc)
+    return _strip_common_subdomain(urlparse(company.careers_url).netloc)
 
 
 def _extract_pid_from_careers_url(careers_url: str) -> Optional[str]:
@@ -65,6 +83,13 @@ def _extract_include_remote_from_careers_url(careers_url: str) -> str:
     v = q.get("filter_include_remote", [None])[0]
     v = str(v) if v not in (None, "") else ""
     return v or "1"
+
+
+def _extract_hl_from_careers_url(careers_url: str) -> str:
+    q = parse_qs(urlparse(careers_url).query)
+    v = q.get("hl", [None])[0]
+    v = str(v) if v not in (None, "") else ""
+    return v or "en"
 
 
 def _search_api_base(careers_url: str) -> str:
@@ -199,10 +224,12 @@ class EightfoldCollector(BaseCollector):
             location = _extract_location_from_careers_url(company.careers_url)
             sort_by = _extract_sort_from_careers_url(company.careers_url)
             include_remote = _extract_include_remote_from_careers_url(company.careers_url)
+            hl = _extract_hl_from_careers_url(company.careers_url)
 
             meta["pid"] = pid
             meta["domain"] = domain
             meta["location"] = location
+            meta["hl"] = hl
 
             search_api = _search_api_base(company.careers_url)
             detail_api = _detail_api_base(company.careers_url)
@@ -281,8 +308,7 @@ class EightfoldCollector(BaseCollector):
                 params = {
                     "position_id": one_job_id,
                     "domain": domain,
-                    # keep these stable; Eaton uses de, but API generally tolerates en
-                    "hl": "en",
+                    "hl": hl,
                     "queried_location": location,
                 }
                 url = f"{detail_api}?{urlencode(params)}"
