@@ -160,8 +160,7 @@ OUT_SITEFINITY_REPORT = "data/output/sitefinity_report_batch2.json"
 # Run these ATS groups first (so you can validate new collectors quickly).
 # You can override via CLI: `--priority ats1,ats2`.
 DEFAULT_PRIORITY_ATS = [
-   # collector for applus
-   "carrier_html"
+    
    
 ]
 
@@ -651,21 +650,34 @@ def main(argv: list[str] | None = None) -> None:
     # Stable order, but priority ATS groups first.
     groups_sorted = sorted(groups, key=lambda g: _priority_order_key(g.ats_name, priority))
 
-    print("Run order:", [g.ats_name for g in groups_sorted])
-    print(hr())
 
     # 4) Execute
     ran_any = False
+
+    # Sammle alle Unternehmen mit zero vacancies über alle ATS-Gruppen hinweg
+    all_zero_vacancy_companies = []
+    all_zero_vacancy_companies_set = set()
+    per_group_zero_vacancy = []
+
     for group in groups_sorted:
-        run_one_ats(
+        # Führe Sammlung durch und erhalte per_company_counts zurück
+        per_company_counts = run_one_ats(
             ats_name=group.ats_name,
             companies=group.companies,
             collector=group.collector,
             items_total=len(items),
             out_csv=group.out_csv,
             out_report=group.out_report,
+            return_per_company_counts=True
         )
         ran_any = True
+
+        # Unternehmen mit zero vacancies in dieser Gruppe sammeln
+        zero_vacancy_companies = [c for c in group.companies if per_company_counts.get(c.company, 0) == 0]
+        for c in zero_vacancy_companies:
+            if c.company not in all_zero_vacancy_companies_set:
+                all_zero_vacancy_companies.append((c.company, c.careers_url))
+                all_zero_vacancy_companies_set.add(c.company)
 
         if args.stop_after_priority and group.ats_name in set(priority):
             # If next group is not priority, stop.
@@ -673,12 +685,22 @@ def main(argv: list[str] | None = None) -> None:
             if next_idx < len(groups_sorted) and groups_sorted[next_idx].ats_name not in set(priority):
                 print("Stopping after priority ATS groups.")
                 print(hr())
-                return
+                break
+
 
     if not ran_any:
         raise RuntimeError(
             "No supported ATS companies found (check ats_new_norm in Excel + registry mappings)"
         )
+
+    # --- Ausgabe aller Unternehmen mit zero vacancies am Ende ---
+    print("\n---\nUnternehmen mit zero vacancies (gesamt, inkl. Karriereseite):")
+    if all_zero_vacancy_companies:
+        for name, url in all_zero_vacancy_companies:
+            print(f"- {name}: {url}")
+    else:
+        print("Alle Unternehmen haben mindestens eine Vakanz gefunden.")
+    print("---\n")
 
 def run_one_ats(
     *,
@@ -688,8 +710,11 @@ def run_one_ats(
     items_total: int,
     out_csv: str,
     out_report: str,
+    return_per_company_counts: bool = False,
 ) -> None:
-    """ Run collection, mapping, normalization, validation, dedupe, export for one ATS."""
+    """ Run collection, mapping, normalization, validation, dedupe, export for one ATS.
+        Wenn return_per_company_counts=True, wird das per_company_counts-Dict zurückgegeben.
+    """
     
     # Collect and normalize job records from all companies
     normalized_job_records = []
@@ -739,11 +764,18 @@ def run_one_ats(
     )
     export_report_json(report, out_report)
 
+
+
     print("DONE:", ats_name)
     print(f"CSV:    {out_csv}")
     print(f"REPORT: {out_report}")
     print(f"Records after dedupe: {len(records_after_dedupe)}")
     print(hr())
+
+    # Für die Gesamtausgabe: per_company_counts zurückgeben, falls gewünscht
+    # (default: None, für Kompatibilität mit bestehendem Aufruf)
+    if return_per_company_counts:
+        return per_company_counts
 
 
 def _collect_and_map(company, collector):
