@@ -83,5 +83,9 @@ def pick_collector(item: CompanyItem) -> str:
         return "aibel_html_hr_manager"
     if ats == "sitefinity":
         return "sitefinity"
+    if ats == "enermech_workable":
+        return "enermech_workable"
+    if ats == "saipem_ncore":
+        return "saipem_ncore"
 
     return "skip"

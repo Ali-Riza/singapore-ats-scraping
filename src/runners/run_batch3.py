@@ -6,6 +6,8 @@ from collections import Counter # For counting per-company jobs
 from concurrent.futures import ThreadPoolExecutor # For parallel collection of companies
 from dataclasses import dataclass, replace
 
+from src.collectors import enermech_workable
+from src.collectors import saipem_ncore
 from src.io.loaders import load_companies # Load companies from Excel
 from src.collectors.registry import pick_collector # Pick collector based on company item
 from src.collectors.oracle import OracleCollector # Oracle collector
@@ -43,6 +45,9 @@ from src.collectors.carrier_html import CarrierHtmlCollector
 from src.collectors.classnk_static_html import ClassNkStaticHtmlCollector
 from src.collectors.aibel_html_hr_manager import AibelHtmlHrManagerCollector
 from src.collectors.sitefinity import SitefinityCollector
+# Add EnerMech and Saipem collectors
+from src.collectors.enermech_workable import EnermechWorkableCollector
+from src.collectors.saipem_ncore import SaipemNcoreCollector
 
 from src.core.normalize import normalize_records # Normalize JobRecord fields
 from src.core.validators import validate_records # Validate JobRecord fields
@@ -160,7 +165,7 @@ OUT_SITEFINITY_REPORT = "data/output/sitefinity_report_batch2.json"
 # Run these ATS groups first (so you can validate new collectors quickly).
 # You can override via CLI: `--priority ats1,ats2`.
 DEFAULT_PRIORITY_ATS = [
-    
+    saipem_ncore  
    
 ]
 
@@ -227,6 +232,8 @@ def _build_groups(
     classnk_static_html_items = [it for it in items if pick_collector(it) == "classnk_static_html"]
     aibel_html_hr_manager_items = [it for it in items if pick_collector(it) == "aibel_html_hr_manager"]
     sitefinity_items = [it for it in items if pick_collector(it) == "sitefinity"]
+    enermech_workable_items = [it for it in items if pick_collector(it) == "enermech_workable"]
+    saipem_ncore_items = [it for it in items if pick_collector(it) == "saipem_ncore"]
 
     print(hr())
     print(f"Loaded total: {len(items)}")
@@ -264,7 +271,23 @@ def _build_groups(
     print(f"ClassNkStaticHtml selected: {len(classnk_static_html_items)}")
     print(f"AibelHtmlHrManager selected: {len(aibel_html_hr_manager_items)}")
     print(f"Sitefinity selected: {len(sitefinity_items)}")
+    print(f"EnermechWorkable selected: {len(enermech_workable_items)}")
+    print(f"SaipemNcore selected: {len(saipem_ncore_items)}")
     print(hr())
+
+    if enermech_workable_items:
+        print("EnermechWorkable companies:", [c.company for c in enermech_workable_items])
+        print(hr())
+    else:
+        print("No EnermechWorkable companies selected. Check ATS_Type in Excel + loader mapping.")
+        print(hr())
+
+    if saipem_ncore_items:
+        print("SaipemNcore companies:", [c.company for c in saipem_ncore_items])
+        print(hr())
+    else:
+        print("No SaipemNcore companies selected. Check ATS_Type in Excel + loader mapping.")
+        print(hr())
 
     if oracle_items:
         print("Oracle companies:", [c.company for c in oracle_items])
@@ -589,6 +612,20 @@ def _build_groups(
             collector=SitefinityCollector(),
             out_csv=OUT_SITEFINITY_CSV,
             out_report=OUT_SITEFINITY_REPORT,
+        ),
+        AtsGroup(
+            ats_name="enermech_workable",
+            companies=enermech_workable_items,
+            collector=EnermechWorkableCollector(),
+            out_csv="data/output/enermech_workable_jobs_batch2.csv",
+            out_report="data/output/enermech_workable_report_batch2.json",
+        ),
+        AtsGroup(
+            ats_name="saipem_ncore",
+            companies=saipem_ncore_items,
+            collector=SaipemNcoreCollector(),
+            out_csv="data/output/saipem_ncore_jobs_batch2.csv",
+            out_report="data/output/saipem_ncore_report_batch2.json",
         ),
     ]
 
