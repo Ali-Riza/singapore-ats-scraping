@@ -165,7 +165,7 @@ OUT_SITEFINITY_REPORT = "data/output/sitefinity_report_batch2.json"
 # Run these ATS groups first (so you can validate new collectors quickly).
 # You can override via CLI: `--priority ats1,ats2`.
 DEFAULT_PRIORITY_ATS = [
-    saipem_ncore  
+    "clinch_careers_site" 
    
 ]
 

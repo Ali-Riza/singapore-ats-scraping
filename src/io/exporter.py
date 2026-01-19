@@ -1,11 +1,20 @@
 from __future__ import annotations # For forward compatibility with future Python versions
 
+def clean_field(value):
+    if isinstance(value, str):
+        # Entferne Zeilenumbrüche und ersetze Semikolon durch Pipe
+        return value.replace('\n', ' ').replace('\r', ' ').replace(';', '|')
+    return value
+
+
 import csv  # For CSV export
 from dataclasses import asdict # asdict to convert dataclass to dict
 from pathlib import Path
 from typing import Iterable, List
 
+
 from src.core.models import JobRecord
+
 
 
 CSV_FIELDS: List[str] = [
@@ -20,6 +29,7 @@ CSV_FIELDS: List[str] = [
 ]
 
 
+
 def export_records_csv(records: Iterable[JobRecord], out_path: str) -> None:
     """ Export JobRecords to a CSV file at out_path."""
     path = Path(out_path)
@@ -32,5 +42,5 @@ def export_records_csv(records: Iterable[JobRecord], out_path: str) -> None:
         w.writeheader()
         for r in records:
             d = asdict(r)
-            row = {k: d.get(k, "") for k in CSV_FIELDS}
+            row = {k: clean_field(d.get(k, "")) for k in CSV_FIELDS}
             w.writerow(row)
