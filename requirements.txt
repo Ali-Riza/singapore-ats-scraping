@@ -6,6 +6,7 @@ truststore==0.10.0
 beautifulsoup4==4.14.3
 pandas==2.3.3
 openpyxl==3.1.5
+tqdm==4.66.4
 
 # Used by Cornerstone collector (token/cookie capture)
 playwright==1.57.0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
@@ -9,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from html import unescape
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -26,6 +28,13 @@ def _clean_text(s: str) -> str:
 
 def _is_bw_offshore(company: CompanyItem) -> bool:
     return (company.company or "").strip().lower() == "bw offshore"
+
+
+def _slugify(value: str) -> str:
+    value = (value or "").lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    value = value.strip("-")
+    return value or "default"
 
 
 BW_OFFSHORE_HEADERS = {
@@ -81,44 +90,65 @@ def _bw_parse_date_to_iso(raw: Optional[str]) -> Optional[str]:
     return None
 
 
+def _bw_make_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(BW_OFFSHORE_HEADERS)
+    return session
+
+
 def _bw_fetch_html_with_session(
-    session: requests.Session,
+    session: Optional[requests.Session],
     url: str,
     *,
     timeout: int = 30,
     allow_curl_fallback: bool = True,
 ) -> str:
-    resp = session.get(url, timeout=timeout, allow_redirects=True)
-    if resp.status_code == 403 and allow_curl_fallback:
-        # Some WP/Cloudflare setups can be fussy; curl often works.
-        out = subprocess.check_output(
-            ["curl", "-sSL", "--compressed", url, "-H", f"User-Agent: {BW_OFFSHORE_HEADERS['User-Agent']}"]
-        )
-        return out.decode("utf-8", errors="replace")
-    resp.raise_for_status()
-    return resp.text
+    sess = session or _bw_make_session()
+    try:
+        resp = sess.get(url, timeout=timeout, allow_redirects=True)
+        if resp.status_code == 403 and allow_curl_fallback:
+            try:
+                output = subprocess.check_output(
+                    [
+                        "curl",
+                        "-sSL",
+                        "--compressed",
+                        url,
+                        "-H",
+                        f"User-Agent: {BW_OFFSHORE_HEADERS['User-Agent']}",
+                    ]
+                )
+                return output.decode("utf-8", errors="replace")
+            except Exception:
+                resp.raise_for_status()
+        resp.raise_for_status()
+        return resp.text
+    finally:
+        if session is None:
+            try:
+                sess.close()
+            except Exception:
+                pass
 
 
 def _bw_extract_data_options_json(html: str) -> Dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
+    element = soup.select_one(".c-careers-table[data-options]")
+    if not element:
+        raise RuntimeError("Could not locate careers data table")
 
-    el = soup.select_one(".c-careers-table[data-options]")
-    if not el:
-        raise RuntimeError("Could not find careers table element with data-options")
-
-    raw = el.get("data-options")
+    raw = element.get("data-options")
     if not raw:
         raise RuntimeError("data-options attribute missing")
 
-    raw = unescape(raw)
-
+    decoded = unescape(raw)
     try:
-        return json.loads(raw)
+        return json.loads(decoded)
     except json.JSONDecodeError:
-        m = re.search(r"\{.*\}\s*$", raw, flags=re.DOTALL)
-        if not m:
+        match = re.search(r"\{.*\}\s*$", decoded, flags=re.DOTALL)
+        if not match:
             raise
-        return json.loads(m.group(0))
+        return json.loads(match.group(0))
 
 
 _BW_HREF_RE = re.compile(r'href="([^"]+)"', re.IGNORECASE)
@@ -127,21 +157,21 @@ _BW_HREF_RE = re.compile(r'href="([^"]+)"', re.IGNORECASE)
 def _bw_extract_href(actions_html: str) -> Optional[str]:
     if not actions_html:
         return None
-    m = _BW_HREF_RE.search(actions_html)
-    return m.group(1) if m else None
+    match = _BW_HREF_RE.search(actions_html)
+    return match.group(1) if match else None
 
 
 def _bw_infer_source(job_url: str) -> str:
-    u = (job_url or "").lower()
-    if "csod.com" in u:
+    lower = (job_url or "").lower()
+    if "csod.com" in lower:
         return "cornerstone"
-    if "recruiterpal.com" in u:
+    if "recruiterpal.com" in lower:
         return "recruiterpal"
-    if "teamtailor.com" in u:
+    if "teamtailor.com" in lower:
         return "teamtailor"
-    if "apply.workable.com" in u:
+    if "apply.workable.com" in lower:
         return "workable"
-    if "varbi.com" in u:
+    if "varbi.com" in lower:
         return "varbi"
     return "bw-group"
 
@@ -149,23 +179,23 @@ def _bw_infer_source(job_url: str) -> str:
 def _bw_extract_job_id(job_url: str) -> Optional[str]:
     if not job_url:
         return None
-    m = re.search(r"/requisition/(\d+)", job_url)
-    if m:
-        return m.group(1)
-    m = re.search(r"/jobs/([a-z0-9]+)", job_url, flags=re.IGNORECASE)
-    if m:
-        return m.group(1)
+    match = re.search(r"/requisition/(\d+)", job_url)
+    if match:
+        return match.group(1)
+    match = re.search(r"/jobs/([a-z0-9]+)", job_url, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
     return None
 
 
 def _bw_extract_csod_token(html: str) -> Optional[str]:
-    m = re.search(r'"token"\s*:\s*"([^"]+)"', html or "")
-    return m.group(1) if m else None
+    match = re.search(r'"token"\s*:\s*"([^"]+)"', html or "")
+    return match.group(1) if match else None
 
 
 def _bw_extract_csod_culture_id(html: str) -> Optional[str]:
-    m = re.search(r'"cultureID"\s*:\s*(\d+)', html or "")
-    return m.group(1) if m else None
+    match = re.search(r'"cultureID"\s*:\s*(\d+)', html or "")
+    return match.group(1) if match else None
 
 
 def _bw_fetch_cornerstone_job_details(
@@ -177,94 +207,86 @@ def _bw_fetch_cornerstone_job_details(
     referer: str,
     timeout: int,
 ) -> Dict[str, Any]:
-    api_url = (
-        f"https://bwoffshore.csod.com/services/x/job-requisition/v2/requisitions/{req_id}"
-        f"/jobDetails?cultureId={culture_id}"
-    )
+    parsed = urlparse(referer)
+    if not parsed.netloc:
+        raise RuntimeError("Invalid Cornerstone job URL")
+    base = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    api_url = f"{base}/services/x/job-requisition/v2/requisitions/{req_id}/jobDetails?cultureId={culture_id}"
+
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {token}",
         "Referer": referer,
-        "User-Agent": "Mozilla/5.0",
     }
-    r = session.get(api_url, headers=headers, timeout=timeout)
-    r.raise_for_status()
-    payload = r.json()
+
+    response = session.get(api_url, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
     data = payload.get("data")
     return data if isinstance(data, dict) else {}
 
 
 def _bw_extract_posted_date_from_cornerstone_api(data: Dict[str, Any]) -> Optional[str]:
-    for key in ("openDate", "postingStartDate", "datePosted", "postedDate"):
-        v = data.get(key)
-        if isinstance(v, str) and v.strip():
-            return _bw_parse_date_to_iso(v)
+    for key in ("openDate", "postingStartDate", "datePosted", "postedDate", "createdDate"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return _bw_parse_date_to_iso(value)
     return None
 
 
 def _collect_bw_offshore(company: CompanyItem) -> CollectResult:
-    """BW Offshore is a special case: jobs are listed on BW Group careers page (WP),
-    with job links that may point to Cornerstone (bwoffshore.csod.com).
-    """
+    careers_url = company.careers_url or ""
+    meta: Dict[str, Any] = {"raw_items": 0, "matched_singapore": 0, "detail_fetches": 0}
+    if not careers_url:
+        return CollectResult(
+            collector="cornerstone",
+            company=company.company,
+            careers_url=careers_url,
+            raw_jobs=[],
+            meta=meta,
+            error="Missing careers_url",
+        )
+
+    session = _bw_make_session()
     raw_jobs: List[Dict[str, Any]] = []
-    meta: Dict[str, Any] = {
-        "mode": "bw_offshore",
-        "listed": 0,
-        "matched_singapore": 0,
-        "detail_fetches": 0,
-    }
-
-    # Use the provided careers_url from Excel (should be BW Group careers page)
-    careers_url = company.careers_url
-
-    session = _requests_session_with_retries()
-    session.headers.update(BW_OFFSHORE_HEADERS)
-
     try:
         html = _bw_fetch_html_with_session(session, careers_url, timeout=30)
         data = _bw_extract_data_options_json(html)
         items = data.get("items") or []
-        if not isinstance(items, list):
-            items = []
+        meta["raw_items"] = len(items)
 
-        meta["listed"] = len(items)
-
-        # 1) Filter SG jobs and build base records
         base: List[Dict[str, Any]] = []
-        for it in items:
-            if not isinstance(it, dict):
+        for entry in items:
+            company_name = (entry.get("company") or "").strip()
+            location_country = (entry.get("location_country") or "").strip()
+            location_label = (entry.get("location") or "").strip()
+
+            if company_name.lower() != "bw offshore":
                 continue
 
-            company_name = (it.get("company") or "").strip()
-            location_country = (it.get("location_country") or "").strip()
-            location = (it.get("location") or "").strip()
-
-            if company_name.strip().lower() != "bw offshore":
+            combined_location = location_country or location_label
+            if (combined_location or "").lower() != "singapore":
                 continue
 
-            # Require Singapore
-            if (location_country or location).strip().lower() != "singapore":
-                continue
-
-            title = (it.get("name") or "").strip() or None
-            job_url = _bw_extract_href(it.get("actions") or "")
-            source_hint = _bw_infer_source(job_url or "")
-            job_id = _bw_extract_job_id(job_url or "")
+            job_url = _bw_extract_href(entry.get("actions") or "") or ""
+            job_title = _clean_text(entry.get("name"))
+            job_id = _bw_extract_job_id(job_url) or job_url or job_title
+            source_hint = _bw_infer_source(job_url)
 
             base.append(
                 {
-                    "job_id": job_id or "",
-                    "title": title or "",
+                    "job_id": job_id,
+                    "title": job_title,
                     "location": "Singapore",
                     "posted_date": "",
-                    "job_url": job_url or "",
+                    "job_url": job_url,
                     "_source_hint": source_hint,
+                    "company": company.company,
                 }
             )
 
         meta["matched_singapore"] = len(base)
 
-        # 2) Enrich posted_date for Cornerstone links
         for rec in base:
             if rec.get("_source_hint") != "cornerstone":
                 continue
@@ -302,14 +324,14 @@ def _collect_bw_offshore(company: CompanyItem) -> CollectResult:
             meta=meta,
             error=None,
         )
-    except Exception as e:
+    except Exception as exc:
         return CollectResult(
             collector="cornerstone",
             company=company.company,
             careers_url=careers_url,
             raw_jobs=raw_jobs,
             meta=meta,
-            error=str(e),
+            error=str(exc),
         )
     finally:
         try:
@@ -687,6 +709,7 @@ class CornerstoneCollector(BaseCollector):
             "job_ids": 0,
             "detail_fetches": 0,
             "token_captured": False,
+            "token_cached": False,
         }
 
         try:
@@ -695,7 +718,157 @@ class CornerstoneCollector(BaseCollector):
 
             cfg = _config_for_company(company)
 
-            # 1) Capture token + cookies
+            fast_mode = bool(getattr(self, "fast_mode", False))
+            cache_dir_attr = getattr(self, "cache_dir", None)
+            cache_enabled = bool(getattr(self, "cache_enabled", False) and cache_dir_attr)
+            try:
+                cache_ttl = int(getattr(self, "cache_ttl", 900) or 0)
+            except Exception:
+                cache_ttl = 900
+            if cache_ttl < 0:
+                cache_ttl = 0
+
+            auth_cache_path = None
+            if cache_enabled and cache_dir_attr:
+                company_slug = _slugify(getattr(company, "company", ""))
+                auth_cache_path = os.path.join(cache_dir_attr, "cornerstone", company_slug, "auth.json")
+
+            def _load_auth_bundle() -> Optional[Tuple[str, List[dict]]]:
+                if not auth_cache_path:
+                    return None
+                try:
+                    with open(auth_cache_path, "r", encoding="utf-8") as fh:
+                        payload = json.load(fh)
+                except FileNotFoundError:
+                    return None
+                except Exception:
+                    return None
+
+                fetched_at = payload.get("fetched_at")
+                if cache_ttl and isinstance(fetched_at, (int, float)):
+                    if (time.time() - float(fetched_at)) > cache_ttl:
+                        return None
+
+                token = payload.get("token")
+                cookies = payload.get("cookies")
+                if not isinstance(token, str) or not isinstance(cookies, list):
+                    return None
+                return token, cookies
+
+            def _save_auth_bundle(token: str, cookies: List[dict]) -> None:
+                if not auth_cache_path:
+                    return
+                try:
+                    os.makedirs(os.path.dirname(auth_cache_path), exist_ok=True)
+                    payload = {
+                        "fetched_at": time.time(),
+                        "token": token,
+                        "cookies": cookies,
+                    }
+                    tmp_path = f"{auth_cache_path}.tmp"
+                    with open(tmp_path, "w", encoding="utf-8") as fh:
+                        json.dump(payload, fh)
+                    os.replace(tmp_path, auth_cache_path)
+                except Exception:
+                    return
+
+            def _clear_auth_bundle() -> None:
+                if not auth_cache_path:
+                    return
+                try:
+                    os.remove(auth_cache_path)
+                except FileNotFoundError:
+                    pass
+                except Exception:
+                    pass
+
+            def _run_with_token(token: str, cookies: List[dict]) -> List[Dict[str, Any]]:
+                session = _session_with_cookies(cookies)
+                try:
+                    page = 1
+                    page_size = 50
+                    seen: set[str] = set()
+                    ids: List[str] = []
+
+                    while True:
+                        data = _fetch_search_page(
+                            session=session,
+                            cfg=cfg,
+                            token=token,
+                            page_number=page,
+                            page_size=page_size,
+                            country_codes=cfg.default_country_codes,
+                        )
+                        meta["pages"] += 1
+
+                        page_ids = _extract_job_ids(data)
+                        if not page_ids:
+                            break
+
+                        new_ids = [jid for jid in page_ids if jid not in seen]
+                        if not new_ids:
+                            break
+
+                        for jid in new_ids:
+                            seen.add(jid)
+                            ids.append(jid)
+
+                        if len(page_ids) < page_size:
+                            break
+
+                        page += 1
+                        if page > 200:
+                            break
+
+                    meta["job_ids"] = len(ids)
+
+                    if not ids:
+                        return []
+
+                    worker_limit = 16 if fast_mode else 8
+                    max_workers = max(1, min(worker_limit, len(ids)))
+
+                    def _fetch_and_parse(job_id: str) -> Optional[Dict[str, Any]]:
+                        details = _fetch_job_details(session=session, cfg=cfg, token=token, job_id=job_id)
+                        meta["detail_fetches"] += 1
+                        return _parse_details_to_raw(cfg, company.company, job_id, details)
+
+                    out: List[Dict[str, Any]] = []
+                    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                        futures = {ex.submit(_fetch_and_parse, jid): jid for jid in ids}
+                        for fut in as_completed(futures):
+                            try:
+                                rec = fut.result()
+                                if rec:
+                                    out.append(rec)
+                            except Exception:
+                                continue
+
+                    return out
+                finally:
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
+
+            cached_bundle = _load_auth_bundle() if cache_enabled else None
+            if cached_bundle:
+                meta["token_cached"] = True
+                try:
+                    collected = _run_with_token(*cached_bundle)
+                    raw_jobs = collected
+                    return CollectResult(
+                        collector=self.name,
+                        company=company.company,
+                        careers_url=company.careers_url,
+                        raw_jobs=collected,
+                        meta=meta,
+                        error=None,
+                    )
+                except Exception:
+                    meta["token_cached"] = False
+                    _clear_auth_bundle()
+
             try:
                 token, cookies = _get_auth_bundle_via_playwright(company.careers_url)
                 meta["token_captured"] = True
@@ -709,81 +882,16 @@ class CornerstoneCollector(BaseCollector):
                     error="Playwright is not installed; Cornerstone collector requires playwright to capture a Bearer token.",
                 )
 
-            session = _session_with_cookies(cookies)
+            if cache_enabled:
+                _save_auth_bundle(token, cookies)
 
-            # 2) Gather job IDs from search
-            page = 1
-            page_size = 50
-            seen: set[str] = set()
-            ids: List[str] = []
-
-            while True:
-                data = _fetch_search_page(
-                    session=session,
-                    cfg=cfg,
-                    token=token,
-                    page_number=page,
-                    page_size=page_size,
-                    country_codes=cfg.default_country_codes,
-                )
-                meta["pages"] += 1
-
-                page_ids = _extract_job_ids(data)
-                if not page_ids:
-                    break
-
-                new_ids = [jid for jid in page_ids if jid not in seen]
-                if not new_ids:
-                    break
-
-                for jid in new_ids:
-                    seen.add(jid)
-                    ids.append(jid)
-
-                if len(page_ids) < page_size:
-                    break
-
-                page += 1
-                if page > 200:
-                    break
-
-            meta["job_ids"] = len(ids)
-
-            # 3) Fetch details in parallel
-            if not ids:
-                return CollectResult(
-                    collector=self.name,
-                    company=company.company,
-                    careers_url=company.careers_url,
-                    raw_jobs=[],
-                    meta=meta,
-                    error=None,
-                )
-
-            max_workers = min(8, len(ids))
-
-            def _fetch_and_parse(job_id: str) -> Optional[Dict[str, Any]]:
-                details = _fetch_job_details(session=session, cfg=cfg, token=token, job_id=job_id)
-                meta["detail_fetches"] += 1
-                return _parse_details_to_raw(cfg, company.company, job_id, details)
-
-            out: List[Dict[str, Any]] = []
-            with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                futures = {ex.submit(_fetch_and_parse, jid): jid for jid in ids}
-                for fut in as_completed(futures):
-                    try:
-                        rec = fut.result()
-                        if rec:
-                            out.append(rec)
-                    except Exception:
-                        continue
-
-            raw_jobs = out
+            collected = _run_with_token(token, cookies)
+            raw_jobs = collected
             return CollectResult(
                 collector=self.name,
                 company=company.company,
                 careers_url=company.careers_url,
-                raw_jobs=raw_jobs,
+                raw_jobs=collected,
                 meta=meta,
                 error=None,
             )

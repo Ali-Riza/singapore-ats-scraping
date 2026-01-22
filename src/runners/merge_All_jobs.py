@@ -21,7 +21,7 @@ def _read_one_csv(path: Path) -> pd.DataFrame:
     try:
         df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
     except pd.errors.EmptyDataError:
-        print(f"Warnung: Leere Datei übersprungen: {path}")
+        
         return None
 
     # Ensure schema is consistent even if older CSVs miss fields.
@@ -109,8 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         df = _read_one_csv(p)
         if df is not None and not df.empty:
             dfs.append(df)
-        else:
-            print(f"Datei übersprungen (leer oder None): {p}")
+        
 
     merged = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame(columns=CSV_FIELDS)
     before = len(merged)
@@ -124,9 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
         merged.to_excel(writer, index=False, sheet_name=str(args.sheet))
 
-    print(f"Merged CSV files: {len(csv_paths)}")
-    print(f"Rows: {before} -> {after}")
-    print(f"XLSX: {out_path}")
+
 
     return 0
 

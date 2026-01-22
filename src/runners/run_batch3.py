@@ -1,7 +1,11 @@
 from __future__ import annotations # For forward compatibility with future Python versions
 import csv
+import logging
+import shutil
 import subprocess
-from typing import Dict, Tuple, Set
+import os
+import time
+from typing import Dict, Tuple
 def get_job_id(record: dict) -> str:
     # Versuche, eine stabile Job-ID zu nehmen, sonst Fallback auf Company+Title+Location+URL
     for key in ("job_id", "id", "JobID", "JobId", "Job_ID"):  # mögliche Varianten
@@ -62,10 +66,10 @@ def export_status_csv(status_dict: Dict[str, Tuple[str, dict]], out_path: str):
 
 
 import argparse
-import os
 from collections import Counter # For counting per-company jobs
-from concurrent.futures import ThreadPoolExecutor # For parallel collection of companies
+from concurrent.futures import ThreadPoolExecutor, as_completed # For parallel collection of companies
 from dataclasses import dataclass, replace
+from tqdm import tqdm
 
 from src.collectors import enermech_workable
 from src.collectors import saipem_ncore
@@ -117,7 +121,7 @@ from src.core.dedupe import dedupe_records # Dedupe JobRecord list
 from src.io.exporter import export_records_csv # Export JobRecord list to CSV
 from src.io.reporting import build_report, export_report_json # Build and export report
 
-from src.utils.cli import hr
+logger = logging.getLogger(__name__)
 
 
 # Constants for input/output paths
@@ -126,6 +130,24 @@ MASTER_INPUT = "data/input/master_companies_with_fingerprint.xlsx"
 
 
 _ATS_OUTDIR = "data/output/ats_runs/"
+MERGED_XLSX = "data/output/all_jobs_batch3.xlsx"
+BATCH_LABEL = "Batch3"
+
+
+def _previous_csv_path(out_csv: str) -> str:
+    """Compute a sibling CSV path used to store previous run data."""
+    candidates = []
+    if "_jobs_batch3.csv" in out_csv:
+        candidates.append(out_csv.replace("_jobs_batch3.csv", "_jobs_previous.csv"))
+    if "_jobs_batch2.csv" in out_csv:
+        candidates.append(out_csv.replace("_jobs_batch2.csv", "_jobs_previous.csv"))
+    base, ext = os.path.splitext(out_csv)
+    candidates.append(f"{base}_previous{ext}")
+    candidates.append(f"{out_csv}.previous")
+    for candidate in candidates:
+        if candidate and candidate != out_csv:
+            return candidate
+    return out_csv + ".previous"
 
 OUT_ORACLE_CSV = _ATS_OUTDIR + "oracle_jobs_batch3.csv"
 OUT_ORACLE_REPORT = _ATS_OUTDIR + "oracle_report_batch3.json"
@@ -242,10 +264,35 @@ class AtsGroup:
     out_report: str
 
 
+@dataclass(frozen=True)
+class AtsRunSummary:
+    per_company_counts: dict[str, int]
+    total_records: int
+    status_counts: Counter
+    duration_seconds: float
+
+
 def _parse_csv_list(value: str | None) -> list[str]:
     if not value:
         return []
     return [p.strip() for p in value.split(",") if p.strip()]
+
+
+def _env_int(name: str) -> int | None:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _env_bool(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _priority_order_key(ats_name: str, priority: list[str]) -> tuple[int, int]:
@@ -298,150 +345,6 @@ def _build_groups(
     enermech_workable_items = [it for it in items if pick_collector(it) == "enermech_workable"]
     saipem_ncore_items = [it for it in items if pick_collector(it) == "saipem_ncore"]
 
-    print(hr())
-    print(f"Loaded total: {len(items)}")
-    print(hr())
-    print(f"Oracle selected: {len(oracle_items)}")
-    print(f"Workday selected: {len(workday_items)}")
-    print(f"Phenom selected: {len(phenom_items)}")
-    print(f"SuccessFactors selected: {len(successfactors_items)}")
-    print(f"Tribepad selected: {len(tribepad_items)}")
-    print(f"Eightfold selected: {len(eightfold_items)}")
-    print(f"Algolia selected: {len(algolia_items)}")
-    print(f"Cornerstone selected: {len(cornerstone_items)}")
-    print(f"EmbeddedState selected: {len(embeddedstate_items)}")
-    print(f"JibeApiJobs selected: {len(jibe_api_jobs_items)}")
-    print(f"HtmlPagedSearch selected: {len(htmlpagedsearch_items)}")
-    print(f"HiBob selected: {len(hibob_items)}")
-    print(f"JobsynSolr selected: {len(jobsyn_solr_items)}")
-    print(f"Avature selected: {len(avature_items)}")
-    print(f"BreezyPortal selected: {len(breezy_portal_items)}")
-    print(f"UmbracoApi selected: {len(umbraco_api_items)}")
-    print(f"MyCareersFuture selected: {len(mycareersfuture_items)}")
-    print(f"TuvSudRecruitingApi selected: {len(tuvsud_recruiting_api_items)}")
-    print(f"MilchUndZuckerGjb selected: {len(milchundzucker_gjb_items)}")
-    print(f"ClinchCareersSite selected: {len(clinch_careers_site_items)}")
-    print(f"KenticoHtml selected: {len(kentico_html_items)}")
-    print(f"WordpressInlineModals selected: {len(wordpress_inline_modals_items)}")
-    print(f"WordpressElementor selected: {len(wordpress_elementor_items)}")
-    print(f"WordpressRemix selected: {len(wordpress_remix_items)}")
-    print(f"MagnoliaNextJs selected: {len(magnolia_nextjs_items)}")
-    print(f"KrohneNextJs selected: {len(krohne_nextjs_items)}")
-    print(f"KongsbergOptimizelyEasycruit selected: {len(kongsberg_optimizely_easycruit_items)}")
-    print(f"LrEpiserverApi selected: {len(lr_episerver_api_items)}")
-    print(f"AemWorkdayJson selected: {len(aem_workday_json_items)}")
-    print(f"CarrierHtml selected: {len(carrier_html_items)}")
-    print(f"ClassNkStaticHtml selected: {len(classnk_static_html_items)}")
-    print(f"AibelHtmlHrManager selected: {len(aibel_html_hr_manager_items)}")
-    print(f"Sitefinity selected: {len(sitefinity_items)}")
-    print(f"EnermechWorkable selected: {len(enermech_workable_items)}")
-    print(f"SaipemNcore selected: {len(saipem_ncore_items)}")
-    print(hr())
-
-    if enermech_workable_items:
-        print("EnermechWorkable companies:", [c.company for c in enermech_workable_items])
-        print(hr())
-    else:
-        print("No EnermechWorkable companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if saipem_ncore_items:
-        print("SaipemNcore companies:", [c.company for c in saipem_ncore_items])
-        print(hr())
-    else:
-        print("No SaipemNcore companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if oracle_items:
-        print("Oracle companies:", [c.company for c in oracle_items])
-        print(hr())
-    else:
-        print("No oracle companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if workday_items:
-        print("Workday companies:", [c.company for c in workday_items])
-        print(hr())
-    else:
-        print("No workday companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if phenom_items:
-        print("Phenom companies:", [c.company for c in phenom_items])
-        print(hr())
-    else:
-        print("No phenom companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if successfactors_items:
-        print("SuccessFactors companies:", [c.company for c in successfactors_items])
-        print(hr())
-    else:
-        print("No successfactors companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if tribepad_items:
-        print("Tribepad companies:", [c.company for c in tribepad_items])
-        print(hr())
-    else:
-        print("No tribepad companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if eightfold_items:
-        print("Eightfold companies:", [c.company for c in eightfold_items])
-        print(hr())
-    else:
-        print("No eightfold companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if algolia_items:
-        print("Algolia companies:", [c.company for c in algolia_items])
-        print(hr())
-    else:
-        print("No algolia companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if cornerstone_items:
-        print("Cornerstone companies:", [c.company for c in cornerstone_items])
-        print(hr())
-    else:
-        print("No cornerstone companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if embeddedstate_items:
-        print("EmbeddedState companies:", [c.company for c in embeddedstate_items])
-        print(hr())
-    else:
-        print("No embeddedstate companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if jibe_api_jobs_items:
-        print("JibeApiJobs companies:", [c.company for c in jibe_api_jobs_items])
-        print(hr())
-    else:
-        print("No jibe_api_jobs companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if htmlpagedsearch_items:
-        print("HtmlPagedSearch companies:", [c.company for c in htmlpagedsearch_items])
-        print(hr())
-    else:
-        print("No htmlpagedsearch companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if jobsyn_solr_items:
-        print("JobsynSolr companies:", [c.company for c in jobsyn_solr_items])
-        print(hr())
-    else:
-        print("No jobsyn_solr companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
-
-    if avature_items:
-        print("Avature companies:", [c.company for c in avature_items])
-        print(hr())
-    else:
-        print("No avature companies selected. Check ATS_Type in Excel + loader mapping.")
-        print(hr())
 
     groups: list[AtsGroup] = [
         AtsGroup(
@@ -721,9 +624,71 @@ def main(argv: list[str] | None = None) -> None:
         default=(os.environ.get("ATS_ONLY_PRIORITY", "").strip().lower() in {"1", "true", "yes"}),
         help="Run only priority ATS groups (skip everything else)",
     )
+    parser.add_argument(
+        "--group-workers",
+        type=int,
+        default=_env_int("ATS_GROUP_WORKERS"),
+        help="Override max concurrent ATS groups (default scales with CPU count)",
+    )
+    parser.add_argument(
+        "--company-workers",
+        type=int,
+        default=_env_int("ATS_COMPANY_WORKERS"),
+        help="Override per-ATS company worker pool size",
+    )
+    parser.add_argument(
+        "--skip-report",
+        action="store_true",
+        default=(os.environ.get("ATS_SKIP_REPORT", "").strip().lower() in {"1", "true", "yes"}),
+        help="Skip JSON report export to speed up quick reruns",
+    )
+    parser.add_argument(
+        "--skip-merge",
+        action="store_true",
+        default=(os.environ.get("ATS_SKIP_MERGE", "").strip().lower() in {"1", "true", "yes"}),
+        help="Skip merge_All_jobs after collection",
+    )
+    parser.add_argument(
+        "--fast-mode",
+        action="store_true",
+        default=_env_bool("ATS_FAST_MODE"),
+        help="Enable aggressive speed optimizations in collectors (may skip some enrich steps)",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        default=_env_bool("ATS_NO_CACHE"),
+        help="Disable HTTP detail caching during collection",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default=os.environ.get("ATS_CACHE_DIR", "data/cache"),
+        help="Folder for transient collector caches",
+    )
+    parser.add_argument(
+        "--cache-ttl",
+        type=int,
+        default=_env_int("ATS_CACHE_TTL"),
+        help="Seconds to reuse cached detail fetches (default 900)",
+    )
+    parser.add_argument(
+        "--passes",
+        type=int,
+        default=_env_int("ATS_PASSES") or 3,
+        help="How many sequential collection passes to run (default 3)",
+    )
     args = parser.parse_args(argv)
 
     only_set = set(_parse_csv_list(args.only)) if args.only else None
+    group_workers = args.group_workers if args.group_workers and args.group_workers > 0 else None
+    company_workers = args.company_workers if args.company_workers and args.company_workers > 0 else None
+    skip_report = bool(args.skip_report)
+    skip_merge = bool(args.skip_merge)
+    fast_mode = bool(args.fast_mode)
+    use_cache = not bool(args.no_cache)
+    cache_dir = (args.cache_dir or "data/cache") if use_cache else None
+    cache_ttl = args.cache_ttl if (args.cache_ttl is not None and args.cache_ttl >= 0) else 900
+    passes = max(1, int(args.passes or 1))
 
     priority = _parse_csv_list(args.priority)
     if not priority:
@@ -732,7 +697,7 @@ def main(argv: list[str] | None = None) -> None:
     # 1) Load companies
     items = load_companies(MASTER_INPUT)
 
-    # 2) Build groups + print selection counts
+    # 2) Build groups
     groups = _build_groups(items=items)
 
     # 3) Filter and order
@@ -750,43 +715,84 @@ def main(argv: list[str] | None = None) -> None:
     # Stable order, but priority ATS groups first.
     groups_sorted = sorted(groups, key=lambda g: _priority_order_key(g.ats_name, priority))
 
+    overall_start = time.perf_counter()
+
 
     # 4) Parallelisiere die Ausführung der ATS-Gruppen
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     ran_any = False
     all_zero_vacancy_companies = []
     all_zero_vacancy_companies_set = set()
-    futures = []
-    group_names = []
-    # Nutze ThreadPoolExecutor für parallele Gruppen (CPU-lastige Teile könnten auch ProcessPoolExecutor nutzen)
-    with ThreadPoolExecutor(max_workers=min(8, len(groups_sorted))) as executor:
-        for group in groups_sorted:
-            # Führe run_one_ats für jede Gruppe parallel aus
-            future = executor.submit(
-                run_one_ats,
-                ats_name=group.ats_name,
-                companies=group.companies,
-                collector=group.collector,
-                items_total=len(items),
-                out_csv=group.out_csv,
-                out_report=group.out_report,
-                return_per_company_counts=True
-            )
-            futures.append((group, future))
-            group_names.append(group.ats_name)
+    total_companies = sum(len(group.companies) for group in groups_sorted)
 
-        for group, future in futures:
-            try:
-                per_company_counts = future.result()
-                ran_any = True
-                # Unternehmen mit zero vacancies in dieser Gruppe sammeln
-                zero_vacancy_companies = [c for c in group.companies if per_company_counts.get(c.company, 0) == 0]
-                for c in zero_vacancy_companies:
-                    if c.company not in all_zero_vacancy_companies_set:
-                        all_zero_vacancy_companies.append((c.company, c.careers_url))
-                        all_zero_vacancy_companies_set.add(c.company)
-            except Exception as e:
-                print(f"Fehler in Gruppe {group.ats_name}: {e}")
+    collectors_completed = 0
+    total_jobs = 0
+    aggregate_status = Counter()
+    ats_durations: list[tuple[str, float, int]] = []
+
+    default_group_workers = max(4, (os.cpu_count() or 4) * 2)
+    effective_group_workers = min(len(groups_sorted), group_workers or default_group_workers)
+    if effective_group_workers < 1:
+        effective_group_workers = 1
+
+    progress_total = max(1, total_companies * passes)
+    with tqdm(
+        total=progress_total,
+        desc="ATS collection",
+        unit="company",
+        dynamic_ncols=True,
+        colour="green",
+    ) as progress:
+        for pass_index in range(passes):
+            pass_label = f"pass {pass_index + 1}/{passes}"
+            progress.set_description(f"ATS collection ({pass_label})")
+            tqdm.write(f"Starting {pass_label}")
+            pass_start = time.perf_counter()
+
+            with ThreadPoolExecutor(max_workers=effective_group_workers) as executor:
+                futures = {
+                    executor.submit(
+                        run_one_ats,
+                        ats_name=group.ats_name,
+                        companies=group.companies,
+                        collector=group.collector,
+                        items_total=len(items),
+                        out_csv=group.out_csv,
+                        out_report=group.out_report,
+                        progress=progress,
+                        company_workers=company_workers,
+                        skip_report=skip_report,
+                        fast_mode=fast_mode,
+                        cache_dir=cache_dir,
+                        use_cache=use_cache,
+                        cache_ttl=cache_ttl,
+                        update_status=(pass_index == passes - 1),
+                    ): group
+                    for group in groups_sorted
+                }
+
+                for future in as_completed(futures):
+                    group = futures[future]
+                    try:
+                        summary = future.result()
+                        if pass_index == passes - 1:
+                            ran_any = True
+                            collectors_completed += 1
+                            total_jobs += summary.total_records
+                            aggregate_status.update(summary.status_counts)
+                            per_company_counts = summary.per_company_counts
+                            ats_durations.append((group.ats_name, summary.duration_seconds, summary.total_records))
+                            zero_vacancy_companies = [
+                                c for c in group.companies if per_company_counts.get(c.company, 0) == 0
+                            ]
+                            for c in zero_vacancy_companies:
+                                if c.company not in all_zero_vacancy_companies_set:
+                                    all_zero_vacancy_companies.append((c.company, c.careers_url))
+                                    all_zero_vacancy_companies_set.add(c.company)
+                    except Exception:
+                        logger.exception("ATS group failed (%s) during %s", group.ats_name, pass_label)
+
+            pass_elapsed = time.perf_counter() - pass_start
+            tqdm.write(f"Completed {pass_label} in {pass_elapsed:.1f}s")
 
     if not ran_any:
         raise RuntimeError(
@@ -802,6 +808,42 @@ def main(argv: list[str] | None = None) -> None:
         for name, url in all_zero_vacancy_companies:
             writer.writerow([name, url])
 
+    width = shutil.get_terminal_size(fallback=(80, 20)).columns
+    summary_line = "-" * max(20, width)
+    tqdm.write(summary_line)
+    tqdm.write(f"{BATCH_LABEL} finished")
+    tqdm.write(summary_line)
+    tqdm.write(f"Collectors run: {collectors_completed}")
+    tqdm.write(f"Total jobs: {total_jobs}")
+    tqdm.write(
+        "New: {new} | Open: {open_} | Closed: {closed}".format(
+            new=aggregate_status.get("New", 0),
+            open_=aggregate_status.get("Open", 0),
+            closed=aggregate_status.get("Closed", 0),
+        )
+    )
+    tqdm.write(summary_line)
+    tqdm.write(f"CSV folder: {_ATS_OUTDIR}")
+    tqdm.write(f"XLSX: {MERGED_XLSX}")
+    if ats_durations:
+        tqdm.write(summary_line)
+        tqdm.write("Slowest ATS groups (top 5):")
+        for name, duration, job_count in sorted(ats_durations, key=lambda item: item[1], reverse=True)[:5]:
+            tqdm.write(f"- {name}: {duration:.1f}s ({job_count} jobs)")
+    total_elapsed = time.perf_counter() - overall_start
+    tqdm.write(summary_line)
+    tqdm.write(f"Elapsed: {total_elapsed:.1f}s")
+    tqdm.write(summary_line)
+    if fast_mode or (cache_dir is not None and use_cache) or passes != 1:
+        cache_state = "on" if cache_dir is not None and use_cache else "off"
+        tqdm.write(
+            f"Options: fast_mode={'on' if fast_mode else 'off'} | cache={cache_state} (ttl={cache_ttl}s) | passes={passes}"
+        )
+        tqdm.write(summary_line)
+
+    if not skip_merge:
+        subprocess.run(["python", "-m", "src.runners.merge_All_jobs"])
+
 def run_one_ats(
     *,
     ats_name: str,
@@ -810,35 +852,62 @@ def run_one_ats(
     items_total: int,
     out_csv: str,
     out_report: str,
-    return_per_company_counts: bool = False,
-) -> None:
-    """ Run collection, mapping, normalization, validation, dedupe, export for one ATS.
-        Wenn return_per_company_counts=True, wird das per_company_counts-Dict zurückgegeben.
-    """
-    
+    progress: tqdm | None = None,
+    company_workers: int | None = None,
+    skip_report: bool = False,
+    fast_mode: bool = False,
+    cache_dir: str | None = None,
+    use_cache: bool = True,
+    cache_ttl: int = 900,
+    update_status: bool = True,
+) -> AtsRunSummary:
+    """Run collection, mapping, normalization, validation, dedupe, export for one ATS."""
+    start_time = time.perf_counter()
+
+    cache_enabled = bool(use_cache and cache_dir)
+    effective_cache_dir = cache_dir if cache_enabled else None
+    if cache_enabled and effective_cache_dir:
+        os.makedirs(effective_cache_dir, exist_ok=True)
+
+    try:
+        setattr(collector, "fast_mode", bool(fast_mode))
+    except Exception:
+        pass
+    try:
+        setattr(collector, "cache_enabled", cache_enabled)
+        setattr(collector, "cache_dir", effective_cache_dir)
+        setattr(collector, "cache_ttl", cache_ttl)
+    except Exception:
+        pass
+
     # Collect and normalize job records from all companies
     normalized_job_records = []
-    
+
+    default_company_workers = max(4, (os.cpu_count() or 4) * 2)
+    pool_size = company_workers if company_workers and company_workers > 0 else default_company_workers
+    if companies:
+        pool_size = max(1, min(pool_size, len(companies)))
+    else:
+        pool_size = 1
+
     # Use ThreadPoolExecutor for parallel HTTP requests
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        
-        # Submit collection tasks for each company (runs in background)
-        collection_tasks = []
-        for company in companies:
-            # Submit collection task for this company in ThreadPool for collection + mapping
-            task = executor.submit(_collect_and_map, company, collector)
-            collection_tasks.append(task)
-        
-        # After mapping is done, normalize and aggregate results
-        for task in collection_tasks:
+    with ThreadPoolExecutor(max_workers=pool_size) as executor:
+        futures = {
+            executor.submit(_collect_and_map, company, collector): company for company in companies
+        }
+
+        for future in as_completed(futures):
+            company = futures[future]
             try:
-                mapped = task.result()
+                mapped = future.result()
                 if mapped:
                     normalized = normalize_records(mapped)
                     normalized_job_records.extend(normalized)
-            except Exception as e:
-                print(f"Warning: collection failed: {e}")
-                continue
+            except Exception:
+                logger.warning("Collection failed for %s", getattr(company, "company", "unknown"))
+            finally:
+                if progress is not None:
+                    progress.update(1)
 
     # 3) Validate
     validation_stats = validate_records(normalized_job_records)
@@ -853,67 +922,80 @@ def run_one_ats(
     export_records_csv(records_after_dedupe, out_csv)
 
     # 7) Build + export report
-    report = build_report(
-        records_before_dedupe=normalized_job_records,
-        records_after_dedupe=records_after_dedupe,
-        validation_stats=validation_stats,
-        per_company_counts=per_company_counts,
-        input_total_companies=items_total,
-        selected_companies=len(companies),
-        ats_name=ats_name,
-    )
-    export_report_json(report, out_report)
+    if not skip_report:
+        report = build_report(
+            records_before_dedupe=normalized_job_records,
+            records_after_dedupe=records_after_dedupe,
+            validation_stats=validation_stats,
+            per_company_counts=per_company_counts,
+            input_total_companies=items_total,
+            selected_companies=len(companies),
+            ats_name=ats_name,
+        )
+        export_report_json(report, out_report)
+
+    status_counts = Counter()
+    if not update_status:
+        return AtsRunSummary(
+            per_company_counts=per_company_counts,
+            total_records=len(records_after_dedupe),
+            status_counts=status_counts,
+            duration_seconds=time.perf_counter() - start_time,
+        )
 
     # --- Statuslogik: previous.csv vs current.csv ---
-    previous_csv = out_csv.replace("_jobs_batch2.csv", "_jobs_previous.csv")
+    previous_csv = _previous_csv_path(out_csv)
     current_csv = out_csv
-    import os
-    if not os.path.exists(previous_csv):
-        # Erster Lauf: Alle als New markieren und current als previous speichern
-        import shutil
-        # Lese aktuelle CSV
-        import csv
-        with open(current_csv, newline="", encoding="utf-8") as f:
-            reader = list(csv.DictReader(f))
-        for row in reader:
-            row["status"] = "New"
-        fieldnames = list(reader[0].keys()) if reader else []
+    status_counts = Counter()
+
+    def _write_current_with_status(rows: list[dict[str, str]]) -> None:
+        fieldnames = list(rows[0].keys()) if rows else []
         with open(current_csv, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(reader)
-        shutil.copy(current_csv, previous_csv)
-        print(f"Erster Lauf: Status=New und {previous_csv} angelegt.\n")
+            writer.writerows(rows)
+
+    # Load current CSV rows
+    with open(current_csv, newline="", encoding="utf-8") as f:
+        current_rows = list(csv.DictReader(f))
+
+    if not os.path.exists(previous_csv):
+        # Erster Lauf: Alle als New markieren und current als previous speichern
+        for row in current_rows:
+            row["status"] = "New"
+        _write_current_with_status(current_rows)
+        if previous_csv != current_csv:
+            prev_dir = os.path.dirname(previous_csv) or "."
+            os.makedirs(prev_dir, exist_ok=True)
+            shutil.copy(current_csv, previous_csv)
+        status_counts["New"] = len(current_rows)
     else:
         status_dict = compare_job_status(previous_csv, current_csv)
-        # Schreibe Status-Spalte direkt in current.csv
-        if status_dict:
-            import csv
-            with open(current_csv, newline="", encoding="utf-8") as f:
-                reader = list(csv.DictReader(f))
-            for row in reader:
-                jobid = get_job_id(row)
-                status = status_dict.get(jobid, ("New",))[0]  # Default: New
-                row["status"] = status
-            fieldnames = list(reader[0].keys()) if reader else []
-            with open(current_csv, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(reader)
-            print(f"Status-Spalte in {current_csv} ergänzt (New/Closed/Open)\n")
+        for row in current_rows:
+            jobid = get_job_id(row)
+            status = status_dict.get(jobid, ("New",))[0]
+            row["status"] = status
 
+        _write_current_with_status(current_rows)
+        if previous_csv != current_csv:
+            prev_dir = os.path.dirname(previous_csv) or "."
+            os.makedirs(prev_dir, exist_ok=True)
+            shutil.copy(current_csv, previous_csv)
 
+        status_counts.update(
+            (row.get("status", "") or "New").strip() or "New"
+            for row in current_rows
+        )
+        status_counts["Closed"] = sum(
+            1 for status, _ in status_dict.values() if status == "Closed"
+        )
 
-    print("DONE:", ats_name)
-    print(f"CSV:    {out_csv}")
-    print(f"REPORT: {out_report}")
-    print(f"Records after dedupe: {len(records_after_dedupe)}")
-    print(hr())
-
-    # Für die Gesamtausgabe: per_company_counts zurückgeben, falls gewünscht
-    # (default: None, für Kompatibilität mit bestehendem Aufruf)
-    if return_per_company_counts:
-        return per_company_counts
+    return AtsRunSummary(
+        per_company_counts=per_company_counts,
+        total_records=len(records_after_dedupe),
+        status_counts=status_counts,
+        duration_seconds=time.perf_counter() - start_time,
+    )
 
 
 def _collect_and_map(company, collector):
@@ -930,5 +1012,4 @@ def _collect_and_map(company, collector):
 
 if __name__ == "__main__":
     main()
-    subprocess.run(["python", "-m", "src.runners.merge_All_jobs"])
 
