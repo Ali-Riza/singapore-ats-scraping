@@ -751,42 +751,42 @@ def main(argv: list[str] | None = None) -> None:
     groups_sorted = sorted(groups, key=lambda g: _priority_order_key(g.ats_name, priority))
 
 
-    # 4) Execute
+    # 4) Parallelisiere die Ausführung der ATS-Gruppen
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     ran_any = False
-
-    # Sammle alle Unternehmen mit zero vacancies über alle ATS-Gruppen hinweg
     all_zero_vacancy_companies = []
     all_zero_vacancy_companies_set = set()
-    per_group_zero_vacancy = []
+    futures = []
+    group_names = []
+    # Nutze ThreadPoolExecutor für parallele Gruppen (CPU-lastige Teile könnten auch ProcessPoolExecutor nutzen)
+    with ThreadPoolExecutor(max_workers=min(8, len(groups_sorted))) as executor:
+        for group in groups_sorted:
+            # Führe run_one_ats für jede Gruppe parallel aus
+            future = executor.submit(
+                run_one_ats,
+                ats_name=group.ats_name,
+                companies=group.companies,
+                collector=group.collector,
+                items_total=len(items),
+                out_csv=group.out_csv,
+                out_report=group.out_report,
+                return_per_company_counts=True
+            )
+            futures.append((group, future))
+            group_names.append(group.ats_name)
 
-    for group in groups_sorted:
-        # Führe Sammlung durch und erhalte per_company_counts zurück
-        per_company_counts = run_one_ats(
-            ats_name=group.ats_name,
-            companies=group.companies,
-            collector=group.collector,
-            items_total=len(items),
-            out_csv=group.out_csv,
-            out_report=group.out_report,
-            return_per_company_counts=True
-        )
-        ran_any = True
-
-        # Unternehmen mit zero vacancies in dieser Gruppe sammeln
-        zero_vacancy_companies = [c for c in group.companies if per_company_counts.get(c.company, 0) == 0]
-        for c in zero_vacancy_companies:
-            if c.company not in all_zero_vacancy_companies_set:
-                all_zero_vacancy_companies.append((c.company, c.careers_url))
-                all_zero_vacancy_companies_set.add(c.company)
-
-        if args.stop_after_priority and group.ats_name in set(priority):
-            # If next group is not priority, stop.
-            next_idx = groups_sorted.index(group) + 1
-            if next_idx < len(groups_sorted) and groups_sorted[next_idx].ats_name not in set(priority):
-                print("Stopping after priority ATS groups.")
-                print(hr())
-                break
-
+        for group, future in futures:
+            try:
+                per_company_counts = future.result()
+                ran_any = True
+                # Unternehmen mit zero vacancies in dieser Gruppe sammeln
+                zero_vacancy_companies = [c for c in group.companies if per_company_counts.get(c.company, 0) == 0]
+                for c in zero_vacancy_companies:
+                    if c.company not in all_zero_vacancy_companies_set:
+                        all_zero_vacancy_companies.append((c.company, c.careers_url))
+                        all_zero_vacancy_companies_set.add(c.company)
+            except Exception as e:
+                print(f"Fehler in Gruppe {group.ats_name}: {e}")
 
     if not ran_any:
         raise RuntimeError(
