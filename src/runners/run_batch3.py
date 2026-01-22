@@ -1,4 +1,64 @@
 from __future__ import annotations # For forward compatibility with future Python versions
+import csv
+from typing import Dict, Tuple, Set
+def get_job_id(record: dict) -> str:
+    # Versuche, eine stabile Job-ID zu nehmen, sonst Fallback auf Company+Title+Location+URL
+    for key in ("job_id", "id", "JobID", "JobId", "Job_ID"):  # mögliche Varianten
+        if key in record and record[key]:
+            return str(record[key]).strip()
+    # Fallback: Company, Title, Location, URL
+    return "|".join([
+        str(record.get("company", "")).strip(),
+        str(record.get("title", "")).strip(),
+        str(record.get("location", "")).strip(),
+        str(record.get("url", "")).strip(),
+    ])
+
+def read_jobs_csv(path: str) -> Dict[str, dict]:
+    jobs = {}
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                jobid = get_job_id(row)
+                jobs[jobid] = row
+    except FileNotFoundError:
+        pass
+    return jobs
+
+def compare_job_status(previous_csv: str, current_csv: str) -> Dict[str, Tuple[str, dict]]:
+    """
+    Vergleicht previous.csv und current.csv und gibt ein Dict mit Job-ID -> (Status, Datensatz) zurück.
+    Status: 'New', 'Closed', 'Open'
+    """
+    prev_jobs = read_jobs_csv(previous_csv)
+    curr_jobs = read_jobs_csv(current_csv)
+    prev_ids = set(prev_jobs.keys())
+    curr_ids = set(curr_jobs.keys())
+
+    status_dict = {}
+    for jobid in curr_ids - prev_ids:
+        status_dict[jobid] = ("New", curr_jobs[jobid])
+    for jobid in prev_ids - curr_ids:
+        status_dict[jobid] = ("Closed", prev_jobs[jobid])
+    for jobid in prev_ids & curr_ids:
+        status_dict[jobid] = ("Open", curr_jobs[jobid])
+    return status_dict
+
+def export_status_csv(status_dict: Dict[str, Tuple[str, dict]], out_path: str):
+    if not status_dict:
+        return
+    # Nimm alle Felder aus einem beliebigen Datensatz plus 'status'
+    sample = next(iter(status_dict.values()))[1]
+    fieldnames = list(sample.keys()) + ["status"]
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for status, row in status_dict.values():
+            row_out = dict(row)
+            row_out["status"] = status
+            writer.writerow(row_out)
+
 
 import argparse
 import os
@@ -60,113 +120,115 @@ from src.utils.cli import hr
 
 
 # Constants for input/output paths
+
 MASTER_INPUT = "data/input/master_companies_with_fingerprint.xlsx"
 
-OUT_ORACLE_CSV = "data/output/oracle_jobs_batch2.csv"
-OUT_ORACLE_REPORT = "data/output/oracle_report_batch2.json"
 
-OUT_WORKDAY_CSV = "data/output/workday_jobs_batch2.csv"
-OUT_WORKDAY_REPORT = "data/output/workday_report_batch2.json"
+_ATS_OUTDIR = "data/output/ats_runs/"
 
-OUT_PHENOM_CSV = "data/output/phenom_jobs_batch2.csv"
-OUT_PHENOM_REPORT = "data/output/phenom_report_batch2.json"
+OUT_ORACLE_CSV = _ATS_OUTDIR + "oracle_jobs_batch3.csv"
+OUT_ORACLE_REPORT = _ATS_OUTDIR + "oracle_report_batch3.json"
 
-OUT_SUCCESSFACTORS_CSV = "data/output/successfactors_jobs_batch2.csv"
-OUT_SUCCESSFACTORS_REPORT = "data/output/successfactors_report_batch2.json"
+OUT_WORKDAY_CSV = _ATS_OUTDIR + "workday_jobs_batch3.csv"
+OUT_WORKDAY_REPORT = _ATS_OUTDIR + "workday_report_batch3.json"
 
-OUT_TRIBEPAD_CSV = "data/output/tribepad_jobs_batch2.csv"
-OUT_TRIBEPAD_REPORT = "data/output/tribepad_report_batch2.json"
+OUT_PHENOM_CSV = _ATS_OUTDIR + "phenom_jobs_batch3.csv"
+OUT_PHENOM_REPORT = _ATS_OUTDIR + "phenom_report_batch3.json"
 
-OUT_EIGHTFOLD_CSV = "data/output/eightfold_jobs_batch2.csv"
-OUT_EIGHTFOLD_REPORT = "data/output/eightfold_report_batch2.json"
+OUT_SUCCESSFACTORS_CSV = _ATS_OUTDIR + "successfactors_jobs_batch3.csv"
+OUT_SUCCESSFACTORS_REPORT = _ATS_OUTDIR + "successfactors_report_batch3.json"
 
-OUT_ALGOLIA_CSV = "data/output/algolia_jobs_batch2.csv"
-OUT_ALGOLIA_REPORT = "data/output/algolia_report_batch2.json"
+OUT_TRIBEPAD_CSV = _ATS_OUTDIR + "tribepad_jobs_batch3.csv"
+OUT_TRIBEPAD_REPORT = _ATS_OUTDIR + "tribepad_report_batch3.json"
 
-OUT_CORNERSTONE_CSV = "data/output/cornerstone_jobs_batch2.csv"
-OUT_CORNERSTONE_REPORT = "data/output/cornerstone_report_batch2.json"
+OUT_EIGHTFOLD_CSV = _ATS_OUTDIR + "eightfold_jobs_batch3.csv"
+OUT_EIGHTFOLD_REPORT = _ATS_OUTDIR + "eightfold_report_batch3.json"
 
-OUT_EMBEDDEDSTATE_CSV = "data/output/embeddedstate_jobs_batch2.csv"
-OUT_EMBEDDEDSTATE_REPORT = "data/output/embeddedstate_report_batch2.json"
+OUT_ALGOLIA_CSV = _ATS_OUTDIR + "algolia_jobs_batch3.csv"
+OUT_ALGOLIA_REPORT = _ATS_OUTDIR + "algolia_report_batch3.json"
 
-OUT_HTMLPAGEDSEARCH_CSV = "data/output/htmlpagedsearch_jobs_batch2.csv"
-OUT_HTMLPAGEDSEARCH_REPORT = "data/output/htmlpagedsearch_report_batch2.json"
+OUT_CORNERSTONE_CSV = _ATS_OUTDIR + "cornerstone_jobs_batch3.csv"
+OUT_CORNERSTONE_REPORT = _ATS_OUTDIR + "cornerstone_report_batch3.json"
 
-OUT_JIBE_API_JOBS_CSV = "data/output/jibe_api_jobs_batch2.csv"
-OUT_JIBE_API_JOBS_REPORT = "data/output/jibe_api_jobs_report_batch2.json"
+OUT_EMBEDDEDSTATE_CSV = _ATS_OUTDIR + "embeddedstate_jobs_batch3.csv"
+OUT_EMBEDDEDSTATE_REPORT = _ATS_OUTDIR + "embeddedstate_report_batch3.json"
 
-OUT_HIBOB_CSV = "data/output/hibob_jobs_batch2.csv"
-OUT_HIBOB_REPORT = "data/output/hibob_report_batch2.json"
+OUT_HTMLPAGEDSEARCH_CSV = _ATS_OUTDIR + "htmlpagedsearch_jobs_batch3.csv"
+OUT_HTMLPAGEDSEARCH_REPORT = _ATS_OUTDIR + "htmlpagedsearch_report_batch3.json"
 
-OUT_JOBSYNC_SOLR_CSV = "data/output/jobsyn_solr_jobs_batch2.csv"
-OUT_JOBSYNC_SOLR_REPORT = "data/output/jobsyn_solr_report_batch2.json"
+OUT_JIBE_API_JOBS_CSV = _ATS_OUTDIR + "jibe_api_jobs_batch3.csv"
+OUT_JIBE_API_JOBS_REPORT = _ATS_OUTDIR + "jibe_api_jobs_report_batch3.json"
 
-OUT_AVATURE_CSV = "data/output/avature_jobs_batch2.csv"
-OUT_AVATURE_REPORT = "data/output/avature_report_batch2.json"
+OUT_HIBOB_CSV = _ATS_OUTDIR + "hibob_jobs_batch3.csv"
+OUT_HIBOB_REPORT = _ATS_OUTDIR + "hibob_report_batch3.json"
 
-OUT_BREEZY_PORTAL_CSV = "data/output/breezy_portal_jobs_batch2.csv"
-OUT_BREEZY_PORTAL_REPORT = "data/output/breezy_portal_report_batch2.json"
+OUT_JOBSYNC_SOLR_CSV = _ATS_OUTDIR + "jobsyn_solr_jobs_batch3.csv"
+OUT_JOBSYNC_SOLR_REPORT = _ATS_OUTDIR + "jobsyn_solr_report_batch3.json"
 
-OUT_UMBRACO_API_CSV = "data/output/umbraco_api_jobs_batch2.csv"
-OUT_UMBRACO_API_REPORT = "data/output/umbraco_api_report_batch2.json"
+OUT_AVATURE_CSV = _ATS_OUTDIR + "avature_jobs_batch3.csv"
+OUT_AVATURE_REPORT = _ATS_OUTDIR + "avature_report_batch3.json"
 
-OUT_MYCAREERSFUTURE_CSV = "data/output/mycareersfuture_jobs_batch2.csv"
-OUT_MYCAREERSFUTURE_REPORT = "data/output/mycareersfuture_report_batch2.json"
+OUT_BREEZY_PORTAL_CSV = _ATS_OUTDIR + "breezy_portal_jobs_batch3.csv"
+OUT_BREEZY_PORTAL_REPORT = _ATS_OUTDIR + "breezy_portal_report_batch3.json"
 
-OUT_TUVSUD_RECRUITING_API_CSV = "data/output/tuvsud_recruiting_api_jobs_batch2.csv"
-OUT_TUVSUD_RECRUITING_API_REPORT = "data/output/tuvsud_recruiting_api_report_batch2.json"
+OUT_UMBRACO_API_CSV = _ATS_OUTDIR + "umbraco_api_jobs_batch3.csv"
+OUT_UMBRACO_API_REPORT = _ATS_OUTDIR + "umbraco_api_report_batch3.json"
 
-OUT_MILCHUNDZUCKER_GJB_CSV = "data/output/milchundzucker_gjb_jobs_batch2.csv"
-OUT_MILCHUNDZUCKER_GJB_REPORT = "data/output/milchundzucker_gjb_report_batch2.json"
+OUT_MYCAREERSFUTURE_CSV = _ATS_OUTDIR + "mycareersfuture_jobs_batch3.csv"
+OUT_MYCAREERSFUTURE_REPORT = _ATS_OUTDIR + "mycareersfuture_report_batch3.json"
 
-OUT_CLINCH_CAREERS_SITE_CSV = "data/output/clinch_careers_site_jobs_batch2.csv"
-OUT_CLINCH_CAREERS_SITE_REPORT = "data/output/clinch_careers_site_report_batch2.json"
+OUT_TUVSUD_RECRUITING_API_CSV = _ATS_OUTDIR + "tuvsud_recruiting_api_jobs_batch3.csv"
+OUT_TUVSUD_RECRUITING_API_REPORT = _ATS_OUTDIR + "tuvsud_recruiting_api_report_batch3.json"
 
-OUT_KENTICO_HTML_CSV = "data/output/kentico_html_jobs_batch2.csv"
-OUT_KENTICO_HTML_REPORT = "data/output/kentico_html_report_batch2.json"
+OUT_MILCHUNDZUCKER_GJB_CSV = _ATS_OUTDIR + "milchundzucker_gjb_jobs_batch3.csv"
+OUT_MILCHUNDZUCKER_GJB_REPORT = _ATS_OUTDIR + "milchundzucker_gjb_report_batch3.json"
 
-OUT_WORDPRESS_INLINE_MODALS_CSV = "data/output/wordpress_inline_modals_jobs_batch2.csv"
-OUT_WORDPRESS_INLINE_MODALS_REPORT = "data/output/wordpress_inline_modals_report_batch2.json"
+OUT_CLINCH_CAREERS_SITE_CSV = _ATS_OUTDIR + "clinch_careers_site_jobs_batch3.csv"
+OUT_CLINCH_CAREERS_SITE_REPORT = _ATS_OUTDIR + "clinch_careers_site_report_batch3.json"
 
-OUT_WORDPRESS_ELEMENTOR_CSV = "data/output/wordpress_elementor_jobs_batch2.csv"
-OUT_WORDPRESS_ELEMENTOR_REPORT = "data/output/wordpress_elementor_report_batch2.json"
+OUT_KENTICO_HTML_CSV = _ATS_OUTDIR + "kentico_html_jobs_batch3.csv"
+OUT_KENTICO_HTML_REPORT = _ATS_OUTDIR + "kentico_html_report_batch3.json"
 
-OUT_WORDPRESS_REMIX_CSV = "data/output/wordpress_remix_jobs_batch2.csv"
-OUT_WORDPRESS_REMIX_REPORT = "data/output/wordpress_remix_report_batch2.json"
+OUT_WORDPRESS_INLINE_MODALS_CSV = _ATS_OUTDIR + "wordpress_inline_modals_jobs_batch3.csv"
+OUT_WORDPRESS_INLINE_MODALS_REPORT = _ATS_OUTDIR + "wordpress_inline_modals_report_batch3.json"
 
-OUT_MAGNOLIA_NEXTJS_CSV = "data/output/magnolia_nextjs_jobs_batch2.csv"
-OUT_MAGNOLIA_NEXTJS_REPORT = "data/output/magnolia_nextjs_report_batch2.json"
+OUT_WORDPRESS_ELEMENTOR_CSV = _ATS_OUTDIR + "wordpress_elementor_jobs_batch3.csv"
+OUT_WORDPRESS_ELEMENTOR_REPORT = _ATS_OUTDIR + "wordpress_elementor_report_batch3.json"
 
-OUT_KROHNE_NEXTJS_CSV = "data/output/krohne_nextjs_jobs_batch2.csv"
-OUT_KROHNE_NEXTJS_REPORT = "data/output/krohne_nextjs_report_batch2.json"
+OUT_WORDPRESS_REMIX_CSV = _ATS_OUTDIR + "wordpress_remix_jobs_batch3.csv"
+OUT_WORDPRESS_REMIX_REPORT = _ATS_OUTDIR + "wordpress_remix_report_batch3.json"
 
-OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_CSV = "data/output/kongsberg_optimizely_easycruit_jobs_batch2.csv"
-OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_REPORT = "data/output/kongsberg_optimizely_easycruit_report_batch2.json"
+OUT_MAGNOLIA_NEXTJS_CSV = _ATS_OUTDIR + "magnolia_nextjs_jobs_batch3.csv"
+OUT_MAGNOLIA_NEXTJS_REPORT = _ATS_OUTDIR + "magnolia_nextjs_report_batch3.json"
 
-OUT_LR_EPISERVER_API_CSV = "data/output/lr_episerver_api_jobs_batch2.csv"
-OUT_LR_EPISERVER_API_REPORT = "data/output/lr_episerver_api_report_batch2.json"
+OUT_KROHNE_NEXTJS_CSV = _ATS_OUTDIR + "krohne_nextjs_jobs_batch3.csv"
+OUT_KROHNE_NEXTJS_REPORT = _ATS_OUTDIR + "krohne_nextjs_report_batch3.json"
 
-OUT_AEM_WORKDAY_JSON_CSV = "data/output/aem_workday_json_jobs_batch2.csv"
-OUT_AEM_WORKDAY_JSON_REPORT = "data/output/aem_workday_json_report_batch2.json"
+OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_CSV = _ATS_OUTDIR + "kongsberg_optimizely_easycruit_jobs_batch3.csv"
+OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_REPORT = _ATS_OUTDIR + "kongsberg_optimizely_easycruit_report_batch3.json"
 
-OUT_CARRIER_HTML_CSV = "data/output/carrier_html_jobs_batch2.csv"
-OUT_CARRIER_HTML_REPORT = "data/output/carrier_html_report_batch2.json"
+OUT_LR_EPISERVER_API_CSV = _ATS_OUTDIR + "lr_episerver_api_jobs_batch3.csv"
+OUT_LR_EPISERVER_API_REPORT = _ATS_OUTDIR + "lr_episerver_api_report_batch3.json"
 
-OUT_CLASSNK_STATIC_HTML_CSV = "data/output/classnk_static_html_jobs_batch2.csv"
-OUT_CLASSNK_STATIC_HTML_REPORT = "data/output/classnk_static_html_report_batch2.json"
+OUT_AEM_WORKDAY_JSON_CSV = _ATS_OUTDIR + "aem_workday_json_jobs_batch3.csv"
+OUT_AEM_WORKDAY_JSON_REPORT = _ATS_OUTDIR + "aem_workday_json_report_batch3.json"
 
-OUT_AIBEL_HTML_HR_MANAGER_CSV = "data/output/aibel_html_hr_manager_jobs_batch2.csv"
-OUT_AIBEL_HTML_HR_MANAGER_REPORT = "data/output/aibel_html_hr_manager_report_batch2.json"
+OUT_CARRIER_HTML_CSV = _ATS_OUTDIR + "carrier_html_jobs_batch3.csv"
+OUT_CARRIER_HTML_REPORT = _ATS_OUTDIR + "carrier_html_report_batch3.json"
 
-OUT_SITEFINITY_CSV = "data/output/sitefinity_jobs_batch2.csv"
-OUT_SITEFINITY_REPORT = "data/output/sitefinity_report_batch2.json"
+OUT_CLASSNK_STATIC_HTML_CSV = _ATS_OUTDIR + "classnk_static_html_jobs_batch3.csv"
+OUT_CLASSNK_STATIC_HTML_REPORT = _ATS_OUTDIR + "classnk_static_html_report_batch3.json"
 
+OUT_AIBEL_HTML_HR_MANAGER_CSV = _ATS_OUTDIR + "aibel_html_hr_manager_jobs_batch3.csv"
+OUT_AIBEL_HTML_HR_MANAGER_REPORT = _ATS_OUTDIR + "aibel_html_hr_manager_report_batch3.json"
+
+OUT_SITEFINITY_CSV = _ATS_OUTDIR + "sitefinity_jobs_batch3.csv"
+OUT_SITEFINITY_REPORT = _ATS_OUTDIR + "sitefinity_report_batch3.json"
 
 # Run these ATS groups first (so you can validate new collectors quickly).
 # You can override via CLI: `--priority ats1,ats2`.
 DEFAULT_PRIORITY_ATS = [
-    "clinch_careers_site" 
-   
+    "clinch_careers_site"
 ]
 
 
@@ -617,15 +679,15 @@ def _build_groups(
             ats_name="enermech_workable",
             companies=enermech_workable_items,
             collector=EnermechWorkableCollector(),
-            out_csv="data/output/enermech_workable_jobs_batch2.csv",
-            out_report="data/output/enermech_workable_report_batch2.json",
+            out_csv=_ATS_OUTDIR + "enermech_workable_jobs_batch2.csv",
+            out_report=_ATS_OUTDIR + "enermech_workable_report_batch2.json",
         ),
         AtsGroup(
             ats_name="saipem_ncore",
             companies=saipem_ncore_items,
             collector=SaipemNcoreCollector(),
-            out_csv="data/output/saipem_ncore_jobs_batch2.csv",
-            out_report="data/output/saipem_ncore_report_batch2.json",
+            out_csv=_ATS_OUTDIR + "saipem_ncore_jobs_batch2.csv",
+            out_report=_ATS_OUTDIR + "saipem_ncore_report_batch2.json",
         ),
     ]
 
@@ -800,6 +862,44 @@ def run_one_ats(
         ats_name=ats_name,
     )
     export_report_json(report, out_report)
+
+    # --- Statuslogik: previous.csv vs current.csv ---
+    previous_csv = out_csv.replace("_jobs_batch2.csv", "_jobs_previous.csv")
+    current_csv = out_csv
+    import os
+    if not os.path.exists(previous_csv):
+        # Erster Lauf: Alle als New markieren und current als previous speichern
+        import shutil
+        # Lese aktuelle CSV
+        import csv
+        with open(current_csv, newline="", encoding="utf-8") as f:
+            reader = list(csv.DictReader(f))
+        for row in reader:
+            row["status"] = "New"
+        fieldnames = list(reader[0].keys()) if reader else []
+        with open(current_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(reader)
+        shutil.copy(current_csv, previous_csv)
+        print(f"Erster Lauf: Status=New und {previous_csv} angelegt.\n")
+    else:
+        status_dict = compare_job_status(previous_csv, current_csv)
+        # Schreibe Status-Spalte direkt in current.csv
+        if status_dict:
+            import csv
+            with open(current_csv, newline="", encoding="utf-8") as f:
+                reader = list(csv.DictReader(f))
+            for row in reader:
+                jobid = get_job_id(row)
+                status = status_dict.get(jobid, ("New",))[0]  # Default: New
+                row["status"] = status
+            fieldnames = list(reader[0].keys()) if reader else []
+            with open(current_csv, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(reader)
+            print(f"Status-Spalte in {current_csv} ergänzt (New/Closed/Open)\n")
 
 
 
