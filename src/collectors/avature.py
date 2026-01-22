@@ -78,7 +78,7 @@ def _extract_folder_id(url: str) -> str:
             candidate = values[0].strip()
             if candidate:
                 return candidate
-    path_match = re.search(r"/jobdetail/(?:[^/]+/)?([A-Za-z0-9\-]+)", parsed.path, re.IGNORECASE)
+    path_match = re.search(r"/(?:jobdetail|folderdetail)/(?:[^/]+/)?([A-Za-z0-9\-]+)", parsed.path, re.IGNORECASE)
     if path_match:
         return path_match.group(1)
     regex_match = _FOLDER_ID_RE.search(clean)
@@ -209,6 +209,8 @@ def _load_cached(path: str, ttl: int) -> Optional[Dict[str, Any]]:
     if ttl > 0 and isinstance(timestamp, (int, float)):
         if (time.time() - float(timestamp)) > ttl:
             return None
+    if not payload.get("keep"):
+        return None
     return payload
 
 
@@ -291,7 +293,7 @@ class AvatureCollector(BaseCollector):
                     return _load_cached(path, cache_ttl)
 
                 def save_cached(folder_id: str, job_url: str, keep: bool, record: Optional[Dict[str, Any]]) -> None:
-                    if not cache_enabled or not cache_dir:
+                    if not cache_enabled or not cache_dir or not keep:
                         return
                     payload = {
                         "timestamp": time.time(),
@@ -350,7 +352,6 @@ class AvatureCollector(BaseCollector):
 
                     if not keep:
                         meta["skipped_non_sg"] += 1
-                        save_cached(folder_id, job_url, keep=False, record=None)
                         return None
 
                     job_record = {

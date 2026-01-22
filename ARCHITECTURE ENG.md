@@ -51,16 +51,15 @@ Operational constraints
 - No login/session bypass, no CAPTCHA bypass
 - No “100% completeness guarantee” for sites that block access (produce a report instead)
 
-### How to run 
+### How to run
 
 ```bash
 python -m pip install -r requirements.txt
 python -m playwright install chromium
-python -m src.runners.run_batch2
+python -m src.runners.run_batch3 
 
-# Optional: merge all batch2 CSV outputs into one Excel file
-python -m src.runners.merge_batch2_to_xlsx
 ```
+
 
 ## Page 2 – Internal Core Model
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from urllib.parse import urlencode, urljoin, urlparse
 
 import requests
@@ -95,6 +95,57 @@ def _extract_search_rows(base: str, html: str) -> List[Dict[str, Any]]:
     return uniq
 
 
+def _extract_search_rows_markdown(base: str, markdown: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+
+    for line in markdown.splitlines():
+        line = line.strip()
+        if not line.startswith("| ["):
+            continue
+
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 4:
+            continue
+
+        match = re.search(r"\[([^\]]+)\]\(([^)]+)\)", cells[0])
+        if not match:
+            continue
+
+        job_url = _normalize_url(base, match.group(2))
+        if not job_url:
+            continue
+
+        title = _clean_text(match.group(1))
+
+        location_field = cells[3]
+        loc_candidates = re.findall(r"\*([^*]+)", location_field)
+        if not loc_candidates:
+            loc_candidates = [location_field]
+
+        locations = [
+            _clean_text(part)
+            for part in loc_candidates
+            if _clean_text(part)
+        ]
+
+        rows.append({
+            "job_url": job_url,
+            "job_title": title,
+            "locations": locations,
+        })
+
+    seen: set[str] = set()
+    uniq: List[Dict[str, Any]] = []
+    for it in rows:
+        u = it.get("job_url") or ""
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        uniq.append(it)
+
+    return uniq
+
+
 def _job_uid_from_detail(detail_html: str) -> str:
     m = re.search(r"job_uid=([0-9a-f]{32})", detail_html or "", flags=re.I)
     if m:
@@ -127,6 +178,43 @@ def _extract_apply_url(detail_soup: BeautifulSoup, job_url: str) -> str:
     return ""
 
 
+def _extract_apply_url_markdown(markdown: str, job_url: str) -> str:
+    match = re.search(r"\[apply\s+now\]\(([^)]+)\)", markdown, flags=re.I)
+    if not match:
+        return ""
+
+    raw_href = (match.group(1) or "").strip()
+    if not raw_href:
+        return ""
+
+    if raw_href.startswith("#"):
+        return f"{job_url.rstrip('/')}{raw_href}"
+
+    absolute = urljoin(job_url.rstrip("/") + "/", raw_href)
+    parsed = urlparse(absolute)
+    if parsed.scheme not in ("http", "https"):
+        return ""
+
+    return parsed.geturl()
+
+
+def _fetch_content(session: requests.Session, url: str, timeout: float = 30.0) -> Tuple[str, str, List[int]]:
+    statuses: List[int] = []
+
+    response = session.get(url, timeout=timeout)
+    statuses.append(response.status_code)
+
+    if response.status_code in (202, 403):
+        fallback_url = f"https://r.jina.ai/{url}"
+        fallback = requests.get(fallback_url, timeout=timeout)
+        statuses.append(fallback.status_code)
+        fallback.raise_for_status()
+        return fallback.text, "markdown", statuses
+
+    response.raise_for_status()
+    return response.text, "html", statuses
+
+
 class ClinchCareersSiteCollector(BaseCollector):
     name = "clinch_careers_site"
 
@@ -144,11 +232,14 @@ class ClinchCareersSiteCollector(BaseCollector):
             with _make_session() as session:
                 for page in range(1, 6):
                     search_url = _build_search_url(base, query, country_code, page)
-                    r = session.get(search_url, timeout=30)
-                    meta["status"].append(r.status_code)
-                    r.raise_for_status()
+                    content, mode, statuses = _fetch_content(session, search_url)
+                    meta["status"].extend(statuses)
 
-                    items = _extract_search_rows(base, r.text)
+                    if mode == "html":
+                        items = _extract_search_rows(base, content)
+                    else:
+                        items = _extract_search_rows_markdown(base, content)
+
                     if not items:
                         break
 
@@ -161,11 +252,12 @@ class ClinchCareersSiteCollector(BaseCollector):
                     if not job_url:
                         continue
 
-                    r = session.get(job_url, timeout=30)
-                    meta["status"].append(r.status_code)
-                    r.raise_for_status()
+                    detail_content, detail_mode, statuses = _fetch_content(session, job_url)
+                    meta["status"].extend(statuses)
 
-                    detail_html = r.text
+                    detail_html = detail_content if detail_mode == "html" else ""
+                    detail_markdown = detail_content if detail_mode == "markdown" else ""
+
                     job_uid = _job_uid_from_detail(detail_html)
                     public_id = _public_uuid_from_url(job_url)
 
@@ -177,6 +269,8 @@ class ClinchCareersSiteCollector(BaseCollector):
                             "job_uid": job_uid,
                             "public_id": public_id,
                             "detail_html": detail_html,
+                            "detail_markdown": detail_markdown,
+                            "detail_mode": detail_mode,
                         }
                     )
 
@@ -211,10 +305,15 @@ class ClinchCareersSiteCollector(BaseCollector):
             location = "; ".join([_clean_text(x) for x in locations if _clean_text(x)])
 
             detail_html = raw.get("detail_html") or ""
-            soup = BeautifulSoup(detail_html, "html.parser")
+            soup = BeautifulSoup(detail_html, "html.parser") if detail_html else None
 
             job_id = _clean_text(raw.get("job_uid") or raw.get("public_id"))
-            apply_url = _extract_apply_url(soup, job_url)
+
+            apply_url = ""
+            if soup:
+                apply_url = _extract_apply_url(soup, job_url)
+            else:
+                apply_url = _extract_apply_url_markdown(raw.get("detail_markdown") or "", job_url)
 
             out.append(
                 JobRecord(
