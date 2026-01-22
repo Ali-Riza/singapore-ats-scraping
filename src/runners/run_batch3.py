@@ -1,5 +1,6 @@
 from __future__ import annotations # For forward compatibility with future Python versions
 import csv
+import subprocess
 from typing import Dict, Tuple, Set
 def get_job_id(record: dict) -> str:
     # Versuche, eine stabile Job-ID zu nehmen, sonst Fallback auf Company+Title+Location+URL
@@ -792,14 +793,14 @@ def main(argv: list[str] | None = None) -> None:
             "No supported ATS companies found (check ats_new_norm in Excel + registry mappings)"
         )
 
-    # --- Ausgabe aller Unternehmen mit zero vacancies am Ende ---
-    print("\n---\nUnternehmen mit zero vacancies (gesamt, inkl. Karriereseite):")
-    if all_zero_vacancy_companies:
+    # --- Schreibe alle Unternehmen mit zero vacancies in eine CSV ---
+    out_zero_vacancies = "data/output/companies_with_zero_vacancies.csv"
+    import csv
+    with open(out_zero_vacancies, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["company", "careers_url"])
         for name, url in all_zero_vacancy_companies:
-            print(f"- {name}: {url}")
-    else:
-        print("Alle Unternehmen haben mindestens eine Vakanz gefunden.")
-    print("---\n")
+            writer.writerow([name, url])
 
 def run_one_ats(
     *,
@@ -929,4 +930,5 @@ def _collect_and_map(company, collector):
 
 if __name__ == "__main__":
     main()
+    subprocess.run(["python", "-m", "src.runners.merge_All_jobs"])
 
