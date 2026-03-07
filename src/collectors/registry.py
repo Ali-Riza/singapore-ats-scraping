@@ -6,6 +6,13 @@ from src.core.models import CompanyItem
 def pick_collector(item: CompanyItem) -> str:
     """ Pick collector type based on Company's ATS type."""
     ats = (item.ats_type or "").strip().lower()
+    company = (item.company or "").strip().lower()
+
+    # Sulzer migrated from legacy SF/J2W pages to Workday-hosted jobs.
+    # Keep backward compatibility with existing input rows that still say "successfactors".
+    if company == "sulzer" and ats in {"successfactors", "successfactors2"}:
+        return "workday"
+
     # Strict matching: do not use substring heuristics.
     # Keep the input data (ats_type) canonicalized to one of these values.
     if ats == "oracle":

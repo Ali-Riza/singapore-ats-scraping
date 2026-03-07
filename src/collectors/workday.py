@@ -22,6 +22,7 @@ COMPANY_FACET_OVERRIDES: Dict[str, Dict[str, str]] = {
     "Prysmian Group": {"facet_key": "locationCountry", "facet_value": SG_COUNTRY_ID},
     "Rockwell Automation": {"facet_key": "locationCountry", "facet_value": SG_COUNTRY_ID},
     "KSB": {"facet_key": "locationCountry", "facet_value": SG_COUNTRY_ID},
+    "Sulzer": {"facet_key": "locationCountry", "facet_value": SG_COUNTRY_ID},
 }
 
 # Pre-compile regex patterns for performance (avoids recompiling on every job)
@@ -155,7 +156,7 @@ class WorkdayCollector(BaseCollector):
                     resolved_url = wd
 
             # Parse the careers URL to extract two key URLs (one for API, one for public site):
-            endpoint, public_base = _derive_workday_urls(company.careers_url)
+            endpoint, public_base = _derive_workday_urls(resolved_url)
 
             # Special case: Rolls-Royce Power Systems (MTU) uses URL facets for filtering (e.g. ?Location_Country=80938777cac5440fab50d729f9634969) 
             url_facets = None
@@ -574,8 +575,8 @@ def resolve_workday_from_branded_site(url: str) -> Optional[str]:
     html = requests.get(url, timeout=15).text
 
     patterns = [
-        r"https://[a-z0-9\-]+\.wd\d\.myworkdayjobs\.com/[^\"]+",
-        r"https://[a-z0-9\-]+\.wd\d\.myworkdaysite\.com/recruiting/[^\"]+",
+        r"https://[a-z0-9\-]+\.wd\d+\.myworkdayjobs\.com/[^\"]+",
+        r"https://[a-z0-9\-]+\.wd\d+\.myworkdaysite\.com/recruiting/[^\"]+",
     ]
 
     for p in patterns:

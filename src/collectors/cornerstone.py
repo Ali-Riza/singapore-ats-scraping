@@ -419,11 +419,11 @@ def _config_for_company(company: CompanyItem) -> CornerstoneConfig:
     if name == "survitec":
         return CornerstoneConfig(
             search_api_url="https://uk.api.csod.com/rec-job-search/external/jobs",
-            detail_api_template="https://survitec.csod.com/services/x/job-requisition/v2/requisitions/{job_id}/jobDetails?cultureId=4",
+            detail_api_template="https://survitec.csod.com/services/x/job-requisition/v2/requisitions/{job_id}/jobDetails?cultureId=2",
             career_site_id=4,
             career_site_page_id=4,
-            culture_id=4,
-            culture_name="de-DE",
+            culture_id=2,
+            culture_name="en-GB",
             default_country_codes=["sg"],
             company_param="survitec",
             job_url_template="https://survitec.csod.com/ux/ats/careersite/4/home/requisition/{job_id}?c=survitec",

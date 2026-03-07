@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import os
 import time
+import sys
 from typing import Dict, Tuple
 def get_job_id(record: dict) -> str:
     # Versuche, eine stabile Job-ID zu nehmen, sonst Fallback auf Company+Title+Location+URL
@@ -68,7 +69,18 @@ def export_status_csv(status_dict: Dict[str, Tuple[str, dict]], out_path: str):
 import argparse
 from collections import Counter # For counting per-company jobs
 from concurrent.futures import ThreadPoolExecutor, as_completed # For parallel collection of companies
-from dataclasses import dataclass, replace
+try:
+    import dataclasses as _dataclasses
+
+    dataclass = _dataclasses.dataclass  # type: ignore[attr-defined]
+    replace = _dataclasses.replace  # type: ignore[attr-defined]
+except Exception as exc:  # pragma: no cover
+    raise RuntimeError(
+        "Your Python stdlib module 'dataclasses' is missing/broken (no 'dataclass' / 'replace'). "
+        "In this environment, that usually means a corrupted Homebrew Python 3.13 install (empty dataclasses.py). "
+        "Fix: reinstall/upgrade Python (e.g. `brew reinstall python@3.13` or use Python 3.12), "
+        "then recreate the virtualenv (.venv)."
+    ) from exc
 from tqdm import tqdm
 
 from src.collectors import enermech_workable
@@ -842,7 +854,7 @@ def main(argv: list[str] | None = None) -> None:
         tqdm.write(summary_line)
 
     if not skip_merge:
-        subprocess.run(["python", "-m", "src.runners.merge_All_jobs"])
+        subprocess.run([sys.executable, "-m", "src.runners.merge_All_jobs"], check=True)
 
 def run_one_ats(
     *,

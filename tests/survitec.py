@@ -14,15 +14,15 @@ from urllib3.util.retry import Retry
 CAREERS_URL = "https://survitec.csod.com/ux/ats/careersite/4/home?c=survitec&country=sg"
 
 SEARCH_API_URL = "https://uk.api.csod.com/rec-job-search/external/jobs"
-DETAIL_API_TEMPLATE = "https://survitec.csod.com/services/x/job-requisition/v2/requisitions/{job_id}/jobDetails?cultureId=4"
+DETAIL_API_TEMPLATE = "https://survitec.csod.com/services/x/job-requisition/v2/requisitions/{job_id}/jobDetails?cultureId=2"
 
 COMPANY = "Survitec"
 SOURCE = "csod"
 
 CAREER_SITE_ID = 4
 CAREER_SITE_PAGE_ID = 4
-CULTURE_ID = 4
-CULTURE_NAME = "de-DE"
+CULTURE_ID = 2
+CULTURE_NAME = "en-GB"
 DEFAULT_COUNTRY_CODES = ["sg"]
 
 DEBUG_DUMP_DETAIL = False
