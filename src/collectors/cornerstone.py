@@ -489,6 +489,36 @@ def _get_auth_bundle_via_playwright(careers_url: str, timeout_s: int = 35) -> Tu
     return token_holder["token"], cookies
 
 
+def _get_auth_bundle_from_html(careers_url: str) -> Tuple[str, List[dict]]:
+    r = requests.get(
+        careers_url,
+        timeout=30,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+    )
+    r.raise_for_status()
+
+    html = r.text or ""
+    m = re.search(r'"token"\s*:\s*"([^"]+)"', html)
+    if not m:
+        raise RuntimeError("Bearer token not found in Cornerstone page HTML.")
+
+    token = m.group(1).strip()
+    cookies: List[dict] = []
+    for c in r.cookies:
+        cookies.append(
+            {
+                "name": c.name,
+                "value": c.value,
+                "domain": c.domain,
+                "path": c.path or "/",
+            }
+        )
+    return token, cookies
+
+
 def _session_with_cookies(cookies: List[dict]) -> requests.Session:
     s = _requests_session_with_retries()
     s.headers.update({"user-agent": "Mozilla/5.0", "accept": "application/json"})
@@ -872,15 +902,11 @@ class CornerstoneCollector(BaseCollector):
             try:
                 token, cookies = _get_auth_bundle_via_playwright(company.careers_url)
                 meta["token_captured"] = True
-            except ImportError:
-                return CollectResult(
-                    collector=self.name,
-                    company=company.company,
-                    careers_url=company.careers_url,
-                    raw_jobs=[],
-                    meta=meta,
-                    error="Playwright is not installed; Cornerstone collector requires playwright to capture a Bearer token.",
-                )
+                meta["token_source"] = "playwright"
+            except Exception:
+                token, cookies = _get_auth_bundle_from_html(company.careers_url)
+                meta["token_captured"] = True
+                meta["token_source"] = "html"
 
             if cache_enabled:
                 _save_auth_bundle(token, cookies)
