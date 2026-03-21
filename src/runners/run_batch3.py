@@ -130,7 +130,7 @@ from src.core.normalize import normalize_records # Normalize JobRecord fields
 from src.core.validators import validate_records # Validate JobRecord fields
 from src.core.dedupe import dedupe_records # Dedupe JobRecord list
 
-from src.io.exporter import export_records_csv # Export JobRecord list to CSV
+from src.io.exporter import export_records_csv, CSV_FIELDS # Export JobRecord list to CSV and use consistent CSV schema
 from src.io.reporting import build_report, export_report_json # Build and export report
 
 logger = logging.getLogger(__name__)
@@ -856,6 +856,58 @@ def main(argv: list[str] | None = None) -> None:
     if not skip_merge:
         subprocess.run([sys.executable, "-m", "src.runners.merge_All_jobs"], check=True)
 
+
+def _backfill_company_column_in_csv(csv_path: str, companies: list) -> None:
+    """Ensure the 'company' column in a finished CSV is filled.
+
+    Uses the careers_url -> company mapping from the CompanyItem list for this
+    ATS group. This is a defensive post-processing step so that downstream
+    users always see the company name in the CSV, even if earlier stages left
+    the field empty.
+    """
+
+    if not companies or not os.path.exists(csv_path):
+        return
+
+    url_to_company: Dict[str, str] = {}
+    for it in companies:
+        try:
+            cu = (getattr(it, "careers_url", "") or "").strip()
+            name = (getattr(it, "company", "") or "").strip()
+        except Exception:
+            continue
+        if cu and name and cu not in url_to_company:
+            url_to_company[cu] = name
+
+    if not url_to_company:
+        return
+
+    import csv as _csv
+
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+        reader = _csv.DictReader(f)
+        rows = list(reader)
+
+    if not rows:
+        return
+
+    for row in rows:
+        comp = (row.get("company") or "").strip()
+        if comp:
+            continue
+        cu = (row.get("careers_url") or "").strip()
+        mapped = url_to_company.get(cu, "")
+        if mapped:
+            row["company"] = mapped
+
+    # Rewrite CSV with the same schema (CSV_FIELDS) and BOM for Excel.
+    with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = _csv.DictWriter(f, fieldnames=list(CSV_FIELDS))
+        writer.writeheader()
+        for row in rows:
+            out_row = {k: (row.get(k, "") or "") for k in CSV_FIELDS}
+            writer.writerow(out_row)
+
 def run_one_ats(
     *,
     ats_name: str,
@@ -927,6 +979,35 @@ def run_one_ats(
     # 4) Dedupe
     records_after_dedupe = dedupe_records(normalized_job_records)
 
+    # 4b) Ensure company is populated from input Excel companies if missing.
+    # In some CSVs the company column ended up empty even though the
+    # JobRecords and reports clearly tracked per-company counts. As an
+    # additional safety net, we re-derive the company name from the
+    # CompanyItem list (company + careers_url) for any records where
+    # company is blank before exporting.
+    if companies:
+        url_to_company: dict[str, str] = {}
+        for it in companies:
+            try:
+                cu = (getattr(it, "careers_url", "") or "").strip()
+                name = (getattr(it, "company", "") or "").strip()
+            except Exception:
+                continue
+            if cu and name and cu not in url_to_company:
+                url_to_company[cu] = name
+
+        if url_to_company:
+            fixed: list = []
+            for r in records_after_dedupe:
+                comp = (getattr(r, "company", "") or "").strip()
+                if not comp:
+                    cu = (getattr(r, "careers_url", "") or "").strip()
+                    mapped = url_to_company.get(cu, "")
+                    if mapped:
+                        r = replace(r, company=mapped)
+                fixed.append(r)
+            records_after_dedupe = fixed
+
     # 5) Per-company counts (after dedupe)
     per_company_counts = dict(Counter(r.company for r in records_after_dedupe))
 
@@ -961,14 +1042,27 @@ def run_one_ats(
     status_counts = Counter()
 
     def _write_current_with_status(rows: list[dict[str, str]]) -> None:
-        fieldnames = list(rows[0].keys()) if rows else []
+        """Write rows to current_csv using the global CSV_FIELDS schema (incl. status).
+
+        This ensures that we keep a stable column order and always include
+        historical/closed jobs as long as they appear in our aggregated dataset.
+        """
+        fieldnames = list(CSV_FIELDS)
         with open(current_csv, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(rows)
+            for row in rows:
+                out_row = {k: row.get(k, "") for k in fieldnames}
+                writer.writerow(out_row)
 
     # Load current CSV rows
-    with open(current_csv, newline="", encoding="utf-8") as f:
+    # Wichtig: ursprüngliche CSVs werden mit "utf-8-sig" geschrieben (BOM),
+    # damit Excel die Kodierung korrekt erkennt. Wenn wir hier nur "utf-8"
+    # verwenden, landet das erste Spalten-Label als "\ufeffcompany" und
+    # beim Zurückschreiben verlieren wir den Wert in "company".
+    # Mit "utf-8-sig" wird der BOM sauber entfernt und die Spalten heißen
+    # wieder exakt wie in CSV_FIELDS.
+    with open(current_csv, newline="", encoding="utf-8-sig") as f:
         current_rows = list(csv.DictReader(f))
 
     if not os.path.exists(previous_csv):
@@ -982,25 +1076,43 @@ def run_one_ats(
             shutil.copy(current_csv, previous_csv)
         status_counts["New"] = len(current_rows)
     else:
+        # Vergleiche previous.csv und current.csv und baue ein vereinheitlichtes
+        # Dataset aus New/Open/Closed-Jobs. Dabei werden auch bereits geschlossene
+        # Listings aus previous.csv weiterhin mit Status=Closed in die aktuelle
+        # CSV übernommen (historische Speicherung).
         status_dict = compare_job_status(previous_csv, current_csv)
-        for row in current_rows:
-            jobid = get_job_id(row)
-            status = status_dict.get(jobid, ("New",))[0]
-            row["status"] = status
 
-        _write_current_with_status(current_rows)
-        if previous_csv != current_csv:
-            prev_dir = os.path.dirname(previous_csv) or "."
-            os.makedirs(prev_dir, exist_ok=True)
-            shutil.copy(current_csv, previous_csv)
+        if not status_dict:
+            # Keine Jobs insgesamt – leere Struktur, aber previous.csv in Sync halten
+            _write_current_with_status([])
+            if previous_csv != current_csv:
+                prev_dir = os.path.dirname(previous_csv) or "."
+                os.makedirs(prev_dir, exist_ok=True)
+                shutil.copy(current_csv, previous_csv)
+        else:
+            rows_with_status: list[dict[str, str]] = []
+            for jobid, (status, row) in status_dict.items():
+                row_out = dict(row)
+                row_out["status"] = status
+                rows_with_status.append(row_out)
 
-        status_counts.update(
-            (row.get("status", "") or "New").strip() or "New"
-            for row in current_rows
-        )
-        status_counts["Closed"] = sum(
-            1 for status, _ in status_dict.values() if status == "Closed"
-        )
+            _write_current_with_status(rows_with_status)
+            if previous_csv != current_csv:
+                prev_dir = os.path.dirname(previous_csv) or "."
+                os.makedirs(prev_dir, exist_ok=True)
+                shutil.copy(current_csv, previous_csv)
+
+            # Status-Zählung direkt aus status_dict ableiten
+            status_counts.update(status for status, _ in status_dict.values())
+
+    # Final safety: ensure the on-disk CSV has company filled.
+    try:
+        _backfill_company_column_in_csv(current_csv, companies)
+        if os.path.exists(previous_csv):
+            _backfill_company_column_in_csv(previous_csv, companies)
+    except Exception:
+        # Do not fail the whole run just because of a backfill issue.
+        logger.warning("company backfill failed for %s", current_csv)
 
     return AtsRunSummary(
         per_company_counts=per_company_counts,

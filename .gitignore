@@ -2,10 +2,12 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # OS
 .DS_Store
 
 # Large / generated
 data/output/
+data/cache/ 
 ARCHIV/

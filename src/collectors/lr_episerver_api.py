@@ -98,13 +98,22 @@ class LrEpiserverApiCollector(BaseCollector):
             with _make_session(base_url) as session:
                 page = 1
                 while page <= 200:  # safety cap
+                    # Load all jobs for this root and filter Singapore-only
+                    # client-side. LR currently marks Singapore as a secondary
+                    # location inside the "locations" array (e.g.
+                    #   "locations": ["Kuala Lumpur | Malaysia", "Singapore | Singapore"]
+                    # ) while jobCountry may still be e.g. "Australia".
+                    # A server-side JobCountry="Singapore" filter would
+                    # therefore drop these jobs. To keep the implementation
+                    # robust against such inconsistencies, we request all
+                    # jobs for the root and then filter in map_to_records.
                     payload: Dict[str, Any] = {
                         "page": page,
                         "pageSize": DEFAULT_PAGE_SIZE,
                         "language": DEFAULT_LANGUAGE,
                         "rootId": DEFAULT_ROOT_ID,
                         "query": "",
-                        "filters": {"JobCountry": ["Singapore"]},
+                        "filters": {},
                     }
 
                     r = session.post(api_url, json=payload, timeout=30)
@@ -161,16 +170,48 @@ class LrEpiserverApiCollector(BaseCollector):
 
             posted_date = _parse_iso_date(_clean_text(raw.get("published") or raw.get("postingStartDate") or ""))
 
-            location_parts = [
-                _clean_text(raw.get("jobLocation")),
-                _clean_text(raw.get("city")),
-                _clean_text(raw.get("jobCountry")),
-            ]
-            location = ", ".join([p for p in location_parts if p])
+            # Build a human-readable location and decide whether this job
+            # belongs to Singapore based on all available hints.
+            job_location = _clean_text(raw.get("jobLocation"))
+            city = _clean_text(raw.get("city"))
+            job_country = _clean_text(raw.get("jobCountry"))
 
-            country = _clean_text(raw.get("jobCountry") or "")
-            if country.casefold() != "singapore":
+            locations_field = raw.get("locations")
+            locations_list: list[str] = []
+            if isinstance(locations_field, list):
+                for v in locations_field:
+                    if isinstance(v, str):
+                        locations_list.append(_clean_text(v))
+
+            # Decide if this job is Singapore-related.
+            blob = " ".join(
+                [
+                    job_location or "",
+                    city or "",
+                    job_country or "",
+                    " ".join(locations_list),
+                ]
+            ).casefold()
+            if "singapore" not in blob:
                 continue
+
+            # Prefer explicit Singapore entries from locations[], otherwise
+            # fall back to the more generic location/city/country combo.
+            sg_locations = [
+                loc for loc in locations_list if "singapore" in (loc or "").casefold()
+            ]
+            if sg_locations:
+                # Deduplicate while preserving order
+                seen = set()
+                uniq_sg: list[str] = []
+                for loc in sg_locations:
+                    if loc not in seen:
+                        seen.add(loc)
+                        uniq_sg.append(loc)
+                location = " | ".join(uniq_sg)
+            else:
+                location_parts = [job_location, city, job_country]
+                location = ", ".join([p for p in location_parts if p])
 
             out.append(
                 JobRecord(
