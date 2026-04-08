@@ -10,8 +10,8 @@ from src.io.exporter import CSV_FIELDS
 
 
 DEFAULT_INPUT_DIR = Path("data/output/ats_runs")
-DEFAULT_GLOB = "*_jobs_batch3.csv"
-DEFAULT_OUT = Path("data/output/all_jobs_batch3.xlsx")
+DEFAULT_GLOB = "*_jobs.csv"
+DEFAULT_OUT = Path("data/output/all_jobs.xlsx")
 DEFAULT_SHEET = "jobs"
 
 
@@ -67,17 +67,17 @@ def _dedupe(df: pd.DataFrame) -> pd.DataFrame:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Merge all *_jobs_batch2.csv into one XLSX workbook (data/output/all_jobs_batch2.xlsx by default)."
+        description="Merge ATS job CSV files into one XLSX workbook."
     )
     parser.add_argument(
         "--input-dir",
         default=str(DEFAULT_INPUT_DIR),
-        help=f"Directory containing batch2 CSV outputs (default: {DEFAULT_INPUT_DIR}).",
+        help=f"Directory containing ATS CSV outputs (default: {DEFAULT_INPUT_DIR}).",
     )
     parser.add_argument(
         "--pattern",
         default=DEFAULT_GLOB,
-        help=f"Glob pattern for batch2 CSVs (default: {DEFAULT_GLOB}).",
+        help=f"Glob pattern for CSVs (default: {DEFAULT_GLOB}).",
     )
     parser.add_argument(
         "--out",
@@ -101,8 +101,20 @@ def main(argv: list[str] | None = None) -> int:
     out_path = Path(args.out)
 
     csv_paths = list(_iter_input_csvs(input_dir, args.pattern))
+    tried_patterns = [args.pattern]
+
+    # Compatibility for underscore-suffixed names that may exist from prior runs.
+    if not csv_paths and args.pattern == DEFAULT_GLOB:
+        for legacy in ("*_jobs_.csv",):
+            tried_patterns.append(legacy)
+            csv_paths = list(_iter_input_csvs(input_dir, legacy))
+            if csv_paths:
+                break
+
     if not csv_paths:
-        raise RuntimeError(f"No CSV files found: {input_dir}/{args.pattern}")
+        raise RuntimeError(
+            f"No CSV files found in {input_dir}. Tried patterns: {', '.join(tried_patterns)}"
+        )
 
     dfs: list[pd.DataFrame] = []
     for p in csv_paths:

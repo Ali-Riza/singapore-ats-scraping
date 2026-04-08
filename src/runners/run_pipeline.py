@@ -127,6 +127,15 @@ from src.collectors.carrier_html import CarrierHtmlCollector
 from src.collectors.classnk_static_html import ClassNkStaticHtmlCollector
 from src.collectors.aibel_html_hr_manager import AibelHtmlHrManagerCollector
 from src.collectors.sitefinity import SitefinityCollector
+from src.collectors.jobstreet_company_page import JobStreetCompanyPageCollector
+from src.collectors.icims import IcimsCollector
+from src.collectors.recruiterpal_api import RecruiterpalApiCollector
+from src.collectors.syngenta_api import SyngentaApiCollector
+from src.collectors.wordpress_simple_job_board import WordpressSimpleJobBoardCollector
+from src.collectors.ineos_html import IneosHtmlCollector
+from src.collectors.croda_api import CrodaApiCollector
+from src.collectors.teknorapex_html import TeknorApexHtmlCollector
+from src.collectors.onecruiter_iframe import OnecruiterIframeCollector
 # Add EnerMech and Saipem collectors
 from src.collectors.enermech_workable import EnermechWorkableCollector
 from src.collectors.saipem_ncore import SaipemNcoreCollector
@@ -147,15 +156,14 @@ MASTER_INPUT = "data/input/master_companies_with_fingerprint.xlsx"
 
 
 _ATS_OUTDIR = "data/output/ats_runs/"
-MERGED_XLSX = "data/output/all_jobs_batch3.xlsx"
-BATCH_LABEL = "Batch3"
+MERGED_XLSX = "data/output/all_jobs.xlsx"
 
 
 def _previous_csv_path(out_csv: str) -> str:
     """Compute a sibling CSV path used to store previous run data."""
     candidates = []
-    if "_jobs_batch3.csv" in out_csv:
-        candidates.append(out_csv.replace("_jobs_batch3.csv", "_jobs_previous.csv"))
+    if "_jobs_.csv" in out_csv:
+        candidates.append(out_csv.replace("_jobs_.csv", "_jobs_previous.csv"))
     if "_jobs_batch2.csv" in out_csv:
         candidates.append(out_csv.replace("_jobs_batch2.csv", "_jobs_previous.csv"))
     base, ext = os.path.splitext(out_csv)
@@ -166,104 +174,131 @@ def _previous_csv_path(out_csv: str) -> str:
             return candidate
     return out_csv + ".previous"
 
-OUT_ORACLE_CSV = _ATS_OUTDIR + "oracle_jobs_batch3.csv"
-OUT_ORACLE_REPORT = _ATS_OUTDIR + "oracle_report_batch3.json"
+OUT_ORACLE_CSV = _ATS_OUTDIR + "oracle_jobs_.csv"
+OUT_ORACLE_REPORT = _ATS_OUTDIR + "oracle_report_.json"
 
-OUT_WORKDAY_CSV = _ATS_OUTDIR + "workday_jobs_batch3.csv"
-OUT_WORKDAY_REPORT = _ATS_OUTDIR + "workday_report_batch3.json"
+OUT_WORKDAY_CSV = _ATS_OUTDIR + "workday_jobs_.csv"
+OUT_WORKDAY_REPORT = _ATS_OUTDIR + "workday_report_.json"
 
-OUT_PHENOM_CSV = _ATS_OUTDIR + "phenom_jobs_batch3.csv"
-OUT_PHENOM_REPORT = _ATS_OUTDIR + "phenom_report_batch3.json"
+OUT_PHENOM_CSV = _ATS_OUTDIR + "phenom_jobs_.csv"
+OUT_PHENOM_REPORT = _ATS_OUTDIR + "phenom_report_.json"
 
-OUT_SUCCESSFACTORS_CSV = _ATS_OUTDIR + "successfactors_jobs_batch3.csv"
-OUT_SUCCESSFACTORS_REPORT = _ATS_OUTDIR + "successfactors_report_batch3.json"
+OUT_SUCCESSFACTORS_CSV = _ATS_OUTDIR + "successfactors_jobs_.csv"
+OUT_SUCCESSFACTORS_REPORT = _ATS_OUTDIR + "successfactors_report_.json"
 
-OUT_TRIBEPAD_CSV = _ATS_OUTDIR + "tribepad_jobs_batch3.csv"
-OUT_TRIBEPAD_REPORT = _ATS_OUTDIR + "tribepad_report_batch3.json"
+OUT_TRIBEPAD_CSV = _ATS_OUTDIR + "tribepad_jobs_.csv"
+OUT_TRIBEPAD_REPORT = _ATS_OUTDIR + "tribepad_report_.json"
 
-OUT_EIGHTFOLD_CSV = _ATS_OUTDIR + "eightfold_jobs_batch3.csv"
-OUT_EIGHTFOLD_REPORT = _ATS_OUTDIR + "eightfold_report_batch3.json"
+OUT_EIGHTFOLD_CSV = _ATS_OUTDIR + "eightfold_jobs_.csv"
+OUT_EIGHTFOLD_REPORT = _ATS_OUTDIR + "eightfold_report_.json"
 
-OUT_ALGOLIA_CSV = _ATS_OUTDIR + "algolia_jobs_batch3.csv"
-OUT_ALGOLIA_REPORT = _ATS_OUTDIR + "algolia_report_batch3.json"
+OUT_ALGOLIA_CSV = _ATS_OUTDIR + "algolia_jobs_.csv"
+OUT_ALGOLIA_REPORT = _ATS_OUTDIR + "algolia_report_.json"
 
-OUT_CORNERSTONE_CSV = _ATS_OUTDIR + "cornerstone_jobs_batch3.csv"
-OUT_CORNERSTONE_REPORT = _ATS_OUTDIR + "cornerstone_report_batch3.json"
+OUT_CORNERSTONE_CSV = _ATS_OUTDIR + "cornerstone_jobs_.csv"
+OUT_CORNERSTONE_REPORT = _ATS_OUTDIR + "cornerstone_report_.json"
 
-OUT_EMBEDDEDSTATE_CSV = _ATS_OUTDIR + "embeddedstate_jobs_batch3.csv"
-OUT_EMBEDDEDSTATE_REPORT = _ATS_OUTDIR + "embeddedstate_report_batch3.json"
+OUT_EMBEDDEDSTATE_CSV = _ATS_OUTDIR + "embeddedstate_jobs_.csv"
+OUT_EMBEDDEDSTATE_REPORT = _ATS_OUTDIR + "embeddedstate_report_.json"
 
-OUT_HTMLPAGEDSEARCH_CSV = _ATS_OUTDIR + "htmlpagedsearch_jobs_batch3.csv"
-OUT_HTMLPAGEDSEARCH_REPORT = _ATS_OUTDIR + "htmlpagedsearch_report_batch3.json"
+OUT_HTMLPAGEDSEARCH_CSV = _ATS_OUTDIR + "htmlpagedsearch_jobs_.csv"
+OUT_HTMLPAGEDSEARCH_REPORT = _ATS_OUTDIR + "htmlpagedsearch_report_.json"
 
-OUT_JIBE_API_JOBS_CSV = _ATS_OUTDIR + "jibe_api_jobs_batch3.csv"
-OUT_JIBE_API_JOBS_REPORT = _ATS_OUTDIR + "jibe_api_jobs_report_batch3.json"
+OUT_JIBE_API_JOBS_CSV = _ATS_OUTDIR + "jibe_api_jobs_.csv"
+OUT_JIBE_API_JOBS_REPORT = _ATS_OUTDIR + "jibe_api_jobs_report_.json"
 
-OUT_HIBOB_CSV = _ATS_OUTDIR + "hibob_jobs_batch3.csv"
-OUT_HIBOB_REPORT = _ATS_OUTDIR + "hibob_report_batch3.json"
+OUT_HIBOB_CSV = _ATS_OUTDIR + "hibob_jobs_.csv"
+OUT_HIBOB_REPORT = _ATS_OUTDIR + "hibob_report_.json"
 
-OUT_JOBSYNC_SOLR_CSV = _ATS_OUTDIR + "jobsyn_solr_jobs_batch3.csv"
-OUT_JOBSYNC_SOLR_REPORT = _ATS_OUTDIR + "jobsyn_solr_report_batch3.json"
+OUT_JOBSYNC_SOLR_CSV = _ATS_OUTDIR + "jobsyn_solr_jobs_.csv"
+OUT_JOBSYNC_SOLR_REPORT = _ATS_OUTDIR + "jobsyn_solr_report_.json"
 
-OUT_AVATURE_CSV = _ATS_OUTDIR + "avature_jobs_batch3.csv"
-OUT_AVATURE_REPORT = _ATS_OUTDIR + "avature_report_batch3.json"
+OUT_AVATURE_CSV = _ATS_OUTDIR + "avature_jobs_.csv"
+OUT_AVATURE_REPORT = _ATS_OUTDIR + "avature_report_.json"
 
-OUT_BREEZY_PORTAL_CSV = _ATS_OUTDIR + "breezy_portal_jobs_batch3.csv"
-OUT_BREEZY_PORTAL_REPORT = _ATS_OUTDIR + "breezy_portal_report_batch3.json"
+OUT_BREEZY_PORTAL_CSV = _ATS_OUTDIR + "breezy_portal_jobs_.csv"
+OUT_BREEZY_PORTAL_REPORT = _ATS_OUTDIR + "breezy_portal_report_.json"
 
-OUT_UMBRACO_API_CSV = _ATS_OUTDIR + "umbraco_api_jobs_batch3.csv"
-OUT_UMBRACO_API_REPORT = _ATS_OUTDIR + "umbraco_api_report_batch3.json"
+OUT_UMBRACO_API_CSV = _ATS_OUTDIR + "umbraco_api_jobs_.csv"
+OUT_UMBRACO_API_REPORT = _ATS_OUTDIR + "umbraco_api_report_.json"
 
-OUT_MYCAREERSFUTURE_CSV = _ATS_OUTDIR + "mycareersfuture_jobs_batch3.csv"
-OUT_MYCAREERSFUTURE_REPORT = _ATS_OUTDIR + "mycareersfuture_report_batch3.json"
+OUT_MYCAREERSFUTURE_CSV = _ATS_OUTDIR + "mycareersfuture_jobs_.csv"
+OUT_MYCAREERSFUTURE_REPORT = _ATS_OUTDIR + "mycareersfuture_report_.json"
 
-OUT_TUVSUD_RECRUITING_API_CSV = _ATS_OUTDIR + "tuvsud_recruiting_api_jobs_batch3.csv"
-OUT_TUVSUD_RECRUITING_API_REPORT = _ATS_OUTDIR + "tuvsud_recruiting_api_report_batch3.json"
+OUT_TUVSUD_RECRUITING_API_CSV = _ATS_OUTDIR + "tuvsud_recruiting_api_jobs_.csv"
+OUT_TUVSUD_RECRUITING_API_REPORT = _ATS_OUTDIR + "tuvsud_recruiting_api_report_.json"
 
-OUT_MILCHUNDZUCKER_GJB_CSV = _ATS_OUTDIR + "milchundzucker_gjb_jobs_batch3.csv"
-OUT_MILCHUNDZUCKER_GJB_REPORT = _ATS_OUTDIR + "milchundzucker_gjb_report_batch3.json"
+OUT_MILCHUNDZUCKER_GJB_CSV = _ATS_OUTDIR + "milchundzucker_gjb_jobs_.csv"
+OUT_MILCHUNDZUCKER_GJB_REPORT = _ATS_OUTDIR + "milchundzucker_gjb_report_.json"
 
-OUT_CLINCH_CAREERS_SITE_CSV = _ATS_OUTDIR + "clinch_careers_site_jobs_batch3.csv"
-OUT_CLINCH_CAREERS_SITE_REPORT = _ATS_OUTDIR + "clinch_careers_site_report_batch3.json"
+OUT_CLINCH_CAREERS_SITE_CSV = _ATS_OUTDIR + "clinch_careers_site_jobs_.csv"
+OUT_CLINCH_CAREERS_SITE_REPORT = _ATS_OUTDIR + "clinch_careers_site_report_.json"
 
-OUT_KENTICO_HTML_CSV = _ATS_OUTDIR + "kentico_html_jobs_batch3.csv"
-OUT_KENTICO_HTML_REPORT = _ATS_OUTDIR + "kentico_html_report_batch3.json"
+OUT_KENTICO_HTML_CSV = _ATS_OUTDIR + "kentico_html_jobs_.csv"
+OUT_KENTICO_HTML_REPORT = _ATS_OUTDIR + "kentico_html_report_.json"
 
-OUT_WORDPRESS_INLINE_MODALS_CSV = _ATS_OUTDIR + "wordpress_inline_modals_jobs_batch3.csv"
-OUT_WORDPRESS_INLINE_MODALS_REPORT = _ATS_OUTDIR + "wordpress_inline_modals_report_batch3.json"
+OUT_WORDPRESS_INLINE_MODALS_CSV = _ATS_OUTDIR + "wordpress_inline_modals_jobs_.csv"
+OUT_WORDPRESS_INLINE_MODALS_REPORT = _ATS_OUTDIR + "wordpress_inline_modals_report_.json"
 
-OUT_WORDPRESS_ELEMENTOR_CSV = _ATS_OUTDIR + "wordpress_elementor_jobs_batch3.csv"
-OUT_WORDPRESS_ELEMENTOR_REPORT = _ATS_OUTDIR + "wordpress_elementor_report_batch3.json"
+OUT_WORDPRESS_ELEMENTOR_CSV = _ATS_OUTDIR + "wordpress_elementor_jobs_.csv"
+OUT_WORDPRESS_ELEMENTOR_REPORT = _ATS_OUTDIR + "wordpress_elementor_report_.json"
 
-OUT_WORDPRESS_REMIX_CSV = _ATS_OUTDIR + "wordpress_remix_jobs_batch3.csv"
-OUT_WORDPRESS_REMIX_REPORT = _ATS_OUTDIR + "wordpress_remix_report_batch3.json"
+OUT_WORDPRESS_REMIX_CSV = _ATS_OUTDIR + "wordpress_remix_jobs_.csv"
+OUT_WORDPRESS_REMIX_REPORT = _ATS_OUTDIR + "wordpress_remix_report_.json"
 
-OUT_MAGNOLIA_NEXTJS_CSV = _ATS_OUTDIR + "magnolia_nextjs_jobs_batch3.csv"
-OUT_MAGNOLIA_NEXTJS_REPORT = _ATS_OUTDIR + "magnolia_nextjs_report_batch3.json"
+OUT_MAGNOLIA_NEXTJS_CSV = _ATS_OUTDIR + "magnolia_nextjs_jobs_.csv"
+OUT_MAGNOLIA_NEXTJS_REPORT = _ATS_OUTDIR + "magnolia_nextjs_report_.json"
 
-OUT_KROHNE_NEXTJS_CSV = _ATS_OUTDIR + "krohne_nextjs_jobs_batch3.csv"
-OUT_KROHNE_NEXTJS_REPORT = _ATS_OUTDIR + "krohne_nextjs_report_batch3.json"
+OUT_KROHNE_NEXTJS_CSV = _ATS_OUTDIR + "krohne_nextjs_jobs_.csv"
+OUT_KROHNE_NEXTJS_REPORT = _ATS_OUTDIR + "krohne_nextjs_report_.json"
 
-OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_CSV = _ATS_OUTDIR + "kongsberg_optimizely_easycruit_jobs_batch3.csv"
-OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_REPORT = _ATS_OUTDIR + "kongsberg_optimizely_easycruit_report_batch3.json"
+OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_CSV = _ATS_OUTDIR + "kongsberg_optimizely_easycruit_jobs_.csv"
+OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_REPORT = _ATS_OUTDIR + "kongsberg_optimizely_easycruit_report_.json"
 
-OUT_LR_EPISERVER_API_CSV = _ATS_OUTDIR + "lr_episerver_api_jobs_batch3.csv"
-OUT_LR_EPISERVER_API_REPORT = _ATS_OUTDIR + "lr_episerver_api_report_batch3.json"
+OUT_LR_EPISERVER_API_CSV = _ATS_OUTDIR + "lr_episerver_api_jobs_.csv"
+OUT_LR_EPISERVER_API_REPORT = _ATS_OUTDIR + "lr_episerver_api_report_.json"
 
-OUT_AEM_WORKDAY_JSON_CSV = _ATS_OUTDIR + "aem_workday_json_jobs_batch3.csv"
-OUT_AEM_WORKDAY_JSON_REPORT = _ATS_OUTDIR + "aem_workday_json_report_batch3.json"
+OUT_AEM_WORKDAY_JSON_CSV = _ATS_OUTDIR + "aem_workday_json_jobs_.csv"
+OUT_AEM_WORKDAY_JSON_REPORT = _ATS_OUTDIR + "aem_workday_json_report_.json"
 
-OUT_CARRIER_HTML_CSV = _ATS_OUTDIR + "carrier_html_jobs_batch3.csv"
-OUT_CARRIER_HTML_REPORT = _ATS_OUTDIR + "carrier_html_report_batch3.json"
+OUT_CARRIER_HTML_CSV = _ATS_OUTDIR + "carrier_html_jobs_.csv"
+OUT_CARRIER_HTML_REPORT = _ATS_OUTDIR + "carrier_html_report_.json"
 
-OUT_CLASSNK_STATIC_HTML_CSV = _ATS_OUTDIR + "classnk_static_html_jobs_batch3.csv"
-OUT_CLASSNK_STATIC_HTML_REPORT = _ATS_OUTDIR + "classnk_static_html_report_batch3.json"
+OUT_CLASSNK_STATIC_HTML_CSV = _ATS_OUTDIR + "classnk_static_html_jobs_.csv"
+OUT_CLASSNK_STATIC_HTML_REPORT = _ATS_OUTDIR + "classnk_static_html_report_.json"
 
-OUT_AIBEL_HTML_HR_MANAGER_CSV = _ATS_OUTDIR + "aibel_html_hr_manager_jobs_batch3.csv"
-OUT_AIBEL_HTML_HR_MANAGER_REPORT = _ATS_OUTDIR + "aibel_html_hr_manager_report_batch3.json"
+OUT_AIBEL_HTML_HR_MANAGER_CSV = _ATS_OUTDIR + "aibel_html_hr_manager_jobs_.csv"
+OUT_AIBEL_HTML_HR_MANAGER_REPORT = _ATS_OUTDIR + "aibel_html_hr_manager_report_.json"
 
-OUT_SITEFINITY_CSV = _ATS_OUTDIR + "sitefinity_jobs_batch3.csv"
-OUT_SITEFINITY_REPORT = _ATS_OUTDIR + "sitefinity_report_batch3.json"
+OUT_SITEFINITY_CSV = _ATS_OUTDIR + "sitefinity_jobs_.csv"
+OUT_SITEFINITY_REPORT = _ATS_OUTDIR + "sitefinity_report_.json"
+
+OUT_JOBSTREET_COMPANY_PAGE_CSV = _ATS_OUTDIR + "jobstreet_company_page_jobs_.csv"
+OUT_JOBSTREET_COMPANY_PAGE_REPORT = _ATS_OUTDIR + "jobstreet_company_page_report_.json"
+
+OUT_ICIMS_CSV = _ATS_OUTDIR + "icims_jobs_.csv"
+OUT_ICIMS_REPORT = _ATS_OUTDIR + "icims_report_.json"
+
+OUT_RECRUITERPAL_API_CSV = _ATS_OUTDIR + "recruiterpal_api_jobs_.csv"
+OUT_RECRUITERPAL_API_REPORT = _ATS_OUTDIR + "recruiterpal_api_report_.json"
+
+OUT_SYNGENTA_API_CSV = _ATS_OUTDIR + "syngenta_api_jobs_.csv"
+OUT_SYNGENTA_API_REPORT = _ATS_OUTDIR + "syngenta_api_report_.json"
+
+OUT_WORDPRESS_SIMPLE_JOB_BOARD_CSV = _ATS_OUTDIR + "wordpress_simple_job_board_jobs_.csv"
+OUT_WORDPRESS_SIMPLE_JOB_BOARD_REPORT = _ATS_OUTDIR + "wordpress_simple_job_board_report_.json"
+
+OUT_INEOS_HTML_CSV = _ATS_OUTDIR + "ineos_html_jobs_.csv"
+OUT_INEOS_HTML_REPORT = _ATS_OUTDIR + "ineos_html_report_.json"
+
+OUT_CRODA_API_CSV = _ATS_OUTDIR + "croda_api_jobs_.csv"
+OUT_CRODA_API_REPORT = _ATS_OUTDIR + "croda_api_report_.json"
+
+OUT_TEKNORAPEX_HTML_CSV = _ATS_OUTDIR + "teknorapex_html_jobs_.csv"
+OUT_TEKNORAPEX_HTML_REPORT = _ATS_OUTDIR + "teknorapex_html_report_.json"
+
+OUT_ONECRUITER_IFRAME_CSV = _ATS_OUTDIR + "onecruiter_iframe_jobs_.csv"
+OUT_ONECRUITER_IFRAME_REPORT = _ATS_OUTDIR + "onecruiter_iframe_report_.json"
 
 # Run these ATS groups first (so you can validate new collectors quickly).
 # You can override via CLI: `--priority ats1,ats2`.
@@ -322,8 +357,14 @@ def _priority_order_key(ats_name: str, priority: list[str]) -> tuple[int, int]:
 def _build_groups(
     *,
     items: list,
+    ats_outdir: str | None = None,
 ) -> list[AtsGroup]:
     """Build ATS groups (items + collector + output paths) in a stable default order."""
+
+    def _out(path: str) -> str:
+        if not ats_outdir:
+            return path
+        return os.path.join(ats_outdir, os.path.basename(path))
 
     oracle_items = [it for it in items if pick_collector(it) == "oracle"]
     workday_items = [it for it in items if pick_collector(it) == "workday"]
@@ -336,6 +377,20 @@ def _build_groups(
     embeddedstate_items = [it for it in items if pick_collector(it) == "embeddedstate"]
     jibe_api_jobs_items = [it for it in items if pick_collector(it) == "jibe_api_jobs"]
     htmlpagedsearch_items = [it for it in items if pick_collector(it) == "htmlpagedsearch"]
+
+    jobstreet_company_page_items = [
+        it for it in items if pick_collector(it) == "jobstreet_company_page"
+    ]
+    icims_items = [it for it in items if pick_collector(it) == "icims"]
+    recruiterpal_api_items = [it for it in items if pick_collector(it) == "recruiterpal_api"]
+    syngenta_api_items = [it for it in items if pick_collector(it) == "syngenta_api"]
+    wordpress_simple_job_board_items = [
+        it for it in items if pick_collector(it) == "wordpress_simple_job_board"
+    ]
+    ineos_html_items = [it for it in items if pick_collector(it) == "ineos_html"]
+    croda_api_items = [it for it in items if pick_collector(it) == "croda_api"]
+    teknorapex_html_items = [it for it in items if pick_collector(it) == "teknorapex_html"]
+    onecruiter_iframe_items = [it for it in items if pick_collector(it) == "onecruiter_iframe"]
 
     hibob_items = [it for it in items if pick_collector(it) == "hibob"]
     jobsyn_solr_items = [it for it in items if pick_collector(it) == "jobsyn_solr"]
@@ -367,247 +422,310 @@ def _build_groups(
             ats_name="oracle",
             companies=oracle_items,
             collector=OracleCollector(),
-            out_csv=OUT_ORACLE_CSV,
-            out_report=OUT_ORACLE_REPORT,
+            out_csv=_out(OUT_ORACLE_CSV),
+            out_report=_out(OUT_ORACLE_REPORT),
         ),
         AtsGroup(
             ats_name="workday",
             companies=workday_items,
             collector=WorkdayCollector(),
-            out_csv=OUT_WORKDAY_CSV,
-            out_report=OUT_WORKDAY_REPORT,
+            out_csv=_out(OUT_WORKDAY_CSV),
+            out_report=_out(OUT_WORKDAY_REPORT),
         ),
         AtsGroup(
             ats_name="phenom",
             companies=phenom_items,
             collector=PhenomCollector(),
-            out_csv=OUT_PHENOM_CSV,
-            out_report=OUT_PHENOM_REPORT,
+            out_csv=_out(OUT_PHENOM_CSV),
+            out_report=_out(OUT_PHENOM_REPORT),
         ),
         AtsGroup(
             ats_name="successfactors",
             companies=successfactors_items,
             collector=SuccessFactorsCollector(),
-            out_csv=OUT_SUCCESSFACTORS_CSV,
-            out_report=OUT_SUCCESSFACTORS_REPORT,
+            out_csv=_out(OUT_SUCCESSFACTORS_CSV),
+            out_report=_out(OUT_SUCCESSFACTORS_REPORT),
         ),
         AtsGroup(
             ats_name="tribepad",
             companies=tribepad_items,
             collector=TribepadCollector(),
-            out_csv=OUT_TRIBEPAD_CSV,
-            out_report=OUT_TRIBEPAD_REPORT,
+            out_csv=_out(OUT_TRIBEPAD_CSV),
+            out_report=_out(OUT_TRIBEPAD_REPORT),
         ),
         AtsGroup(
             ats_name="eightfold",
             companies=eightfold_items,
             collector=EightfoldCollector(),
-            out_csv=OUT_EIGHTFOLD_CSV,
-            out_report=OUT_EIGHTFOLD_REPORT,
+            out_csv=_out(OUT_EIGHTFOLD_CSV),
+            out_report=_out(OUT_EIGHTFOLD_REPORT),
         ),
         AtsGroup(
             ats_name="algolia",
             companies=algolia_items,
             collector=AlgoliaCollector(),
-            out_csv=OUT_ALGOLIA_CSV,
-            out_report=OUT_ALGOLIA_REPORT,
+            out_csv=_out(OUT_ALGOLIA_CSV),
+            out_report=_out(OUT_ALGOLIA_REPORT),
         ),
         AtsGroup(
             ats_name="cornerstone",
             companies=cornerstone_items,
             collector=CornerstoneCollector(),
-            out_csv=OUT_CORNERSTONE_CSV,
-            out_report=OUT_CORNERSTONE_REPORT,
+            out_csv=_out(OUT_CORNERSTONE_CSV),
+            out_report=_out(OUT_CORNERSTONE_REPORT),
         ),
         AtsGroup(
             ats_name="embeddedstate",
             companies=embeddedstate_items,
             collector=EmbeddedStateCollector(),
-            out_csv=OUT_EMBEDDEDSTATE_CSV,
-            out_report=OUT_EMBEDDEDSTATE_REPORT,
+            out_csv=_out(OUT_EMBEDDEDSTATE_CSV),
+            out_report=_out(OUT_EMBEDDEDSTATE_REPORT),
         ),
         AtsGroup(
             ats_name="jibe_api_jobs",
             companies=jibe_api_jobs_items,
             collector=JibeApiJobsCollector(),
-            out_csv=OUT_JIBE_API_JOBS_CSV,
-            out_report=OUT_JIBE_API_JOBS_REPORT,
+            out_csv=_out(OUT_JIBE_API_JOBS_CSV),
+            out_report=_out(OUT_JIBE_API_JOBS_REPORT),
         ),
         AtsGroup(
             ats_name="htmlpagedsearch",
             companies=htmlpagedsearch_items,
             collector=HtmlPagedSearchCollector(),
-            out_csv=OUT_HTMLPAGEDSEARCH_CSV,
-            out_report=OUT_HTMLPAGEDSEARCH_REPORT,
+            out_csv=_out(OUT_HTMLPAGEDSEARCH_CSV),
+            out_report=_out(OUT_HTMLPAGEDSEARCH_REPORT),
         ),
         # Batch2 expansion collectors
         AtsGroup(
             ats_name="hibob",
             companies=hibob_items,
             collector=HibobCollector(),
-            out_csv=OUT_HIBOB_CSV,
-            out_report=OUT_HIBOB_REPORT,
+            out_csv=_out(OUT_HIBOB_CSV),
+            out_report=_out(OUT_HIBOB_REPORT),
         ),
         AtsGroup(
             ats_name="jobsyn_solr",
             companies=jobsyn_solr_items,
             collector=JobsynSolrCollector(),
-            out_csv=OUT_JOBSYNC_SOLR_CSV,
-            out_report=OUT_JOBSYNC_SOLR_REPORT,
+            out_csv=_out(OUT_JOBSYNC_SOLR_CSV),
+            out_report=_out(OUT_JOBSYNC_SOLR_REPORT),
         ),
         AtsGroup(
             ats_name="avature",
             companies=avature_items,
             collector=AvatureCollector(),
-            out_csv=OUT_AVATURE_CSV,
-            out_report=OUT_AVATURE_REPORT,
+            out_csv=_out(OUT_AVATURE_CSV),
+            out_report=_out(OUT_AVATURE_REPORT),
         ),
         AtsGroup(
             ats_name="breezy_portal",
             companies=breezy_portal_items,
             collector=BreezyPortalCollector(),
-            out_csv=OUT_BREEZY_PORTAL_CSV,
-            out_report=OUT_BREEZY_PORTAL_REPORT,
+            out_csv=_out(OUT_BREEZY_PORTAL_CSV),
+            out_report=_out(OUT_BREEZY_PORTAL_REPORT),
         ),
         AtsGroup(
             ats_name="umbraco_api",
             companies=umbraco_api_items,
             collector=UmbracoApiCollector(),
-            out_csv=OUT_UMBRACO_API_CSV,
-            out_report=OUT_UMBRACO_API_REPORT,
+            out_csv=_out(OUT_UMBRACO_API_CSV),
+            out_report=_out(OUT_UMBRACO_API_REPORT),
         ),
         AtsGroup(
             ats_name="mycareersfuture",
             companies=mycareersfuture_items,
             collector=MyCareersFutureCollector(),
-            out_csv=OUT_MYCAREERSFUTURE_CSV,
-            out_report=OUT_MYCAREERSFUTURE_REPORT,
+            out_csv=_out(OUT_MYCAREERSFUTURE_CSV),
+            out_report=_out(OUT_MYCAREERSFUTURE_REPORT),
         ),
         AtsGroup(
             ats_name="tuvsud_recruiting_api",
             companies=tuvsud_recruiting_api_items,
             collector=TuvSudRecruitingApiCollector(),
-            out_csv=OUT_TUVSUD_RECRUITING_API_CSV,
-            out_report=OUT_TUVSUD_RECRUITING_API_REPORT,
+            out_csv=_out(OUT_TUVSUD_RECRUITING_API_CSV),
+            out_report=_out(OUT_TUVSUD_RECRUITING_API_REPORT),
         ),
         AtsGroup(
             ats_name="milchundzucker_gjb",
             companies=milchundzucker_gjb_items,
             collector=MilchUndZuckerGjbCollector(),
-            out_csv=OUT_MILCHUNDZUCKER_GJB_CSV,
-            out_report=OUT_MILCHUNDZUCKER_GJB_REPORT,
+            out_csv=_out(OUT_MILCHUNDZUCKER_GJB_CSV),
+            out_report=_out(OUT_MILCHUNDZUCKER_GJB_REPORT),
         ),
         AtsGroup(
             ats_name="clinch_careers_site",
             companies=clinch_careers_site_items,
             collector=ClinchCareersSiteCollector(),
-            out_csv=OUT_CLINCH_CAREERS_SITE_CSV,
-            out_report=OUT_CLINCH_CAREERS_SITE_REPORT,
+            out_csv=_out(OUT_CLINCH_CAREERS_SITE_CSV),
+            out_report=_out(OUT_CLINCH_CAREERS_SITE_REPORT),
         ),
         AtsGroup(
             ats_name="kentico_html",
             companies=kentico_html_items,
             collector=KenticoHtmlCollector(),
-            out_csv=OUT_KENTICO_HTML_CSV,
-            out_report=OUT_KENTICO_HTML_REPORT,
+            out_csv=_out(OUT_KENTICO_HTML_CSV),
+            out_report=_out(OUT_KENTICO_HTML_REPORT),
         ),
         AtsGroup(
             ats_name="wordpress_inline_modals",
             companies=wordpress_inline_modals_items,
             collector=WordpressInlineModalsCollector(),
-            out_csv=OUT_WORDPRESS_INLINE_MODALS_CSV,
-            out_report=OUT_WORDPRESS_INLINE_MODALS_REPORT,
+            out_csv=_out(OUT_WORDPRESS_INLINE_MODALS_CSV),
+            out_report=_out(OUT_WORDPRESS_INLINE_MODALS_REPORT),
         ),
         AtsGroup(
             ats_name="wordpress_elementor",
             companies=wordpress_elementor_items,
             collector=WordpressElementorCollector(),
-            out_csv=OUT_WORDPRESS_ELEMENTOR_CSV,
-            out_report=OUT_WORDPRESS_ELEMENTOR_REPORT,
+            out_csv=_out(OUT_WORDPRESS_ELEMENTOR_CSV),
+            out_report=_out(OUT_WORDPRESS_ELEMENTOR_REPORT),
         ),
         AtsGroup(
             ats_name="wordpress_remix",
             companies=wordpress_remix_items,
             collector=WordpressRemixCollector(),
-            out_csv=OUT_WORDPRESS_REMIX_CSV,
-            out_report=OUT_WORDPRESS_REMIX_REPORT,
+            out_csv=_out(OUT_WORDPRESS_REMIX_CSV),
+            out_report=_out(OUT_WORDPRESS_REMIX_REPORT),
         ),
         AtsGroup(
             ats_name="magnolia_nextjs",
             companies=magnolia_nextjs_items,
             collector=MagnoliaNextJsCollector(),
-            out_csv=OUT_MAGNOLIA_NEXTJS_CSV,
-            out_report=OUT_MAGNOLIA_NEXTJS_REPORT,
+            out_csv=_out(OUT_MAGNOLIA_NEXTJS_CSV),
+            out_report=_out(OUT_MAGNOLIA_NEXTJS_REPORT),
         ),
         AtsGroup(
             ats_name="krohne_nextjs",
             companies=krohne_nextjs_items,
             collector=KrohneNextJsCollector(),
-            out_csv=OUT_KROHNE_NEXTJS_CSV,
-            out_report=OUT_KROHNE_NEXTJS_REPORT,
+            out_csv=_out(OUT_KROHNE_NEXTJS_CSV),
+            out_report=_out(OUT_KROHNE_NEXTJS_REPORT),
         ),
         AtsGroup(
             ats_name="kongsberg_optimizely_easycruit",
             companies=kongsberg_optimizely_easycruit_items,
             collector=KongsbergOptimizelyEasycruitCollector(),
-            out_csv=OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_CSV,
-            out_report=OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_REPORT,
+            out_csv=_out(OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_CSV),
+            out_report=_out(OUT_KONGSBERG_OPTIMIZELY_EASYCRUIT_REPORT),
         ),
         AtsGroup(
             ats_name="lr_episerver_api",
             companies=lr_episerver_api_items,
             collector=LrEpiserverApiCollector(),
-            out_csv=OUT_LR_EPISERVER_API_CSV,
-            out_report=OUT_LR_EPISERVER_API_REPORT,
+            out_csv=_out(OUT_LR_EPISERVER_API_CSV),
+            out_report=_out(OUT_LR_EPISERVER_API_REPORT),
         ),
         AtsGroup(
             ats_name="aem_workday_json",
             companies=aem_workday_json_items,
             collector=AemWorkdayJsonCollector(),
-            out_csv=OUT_AEM_WORKDAY_JSON_CSV,
-            out_report=OUT_AEM_WORKDAY_JSON_REPORT,
+            out_csv=_out(OUT_AEM_WORKDAY_JSON_CSV),
+            out_report=_out(OUT_AEM_WORKDAY_JSON_REPORT),
         ),
         AtsGroup(
             ats_name="carrier_html",
             companies=carrier_html_items,
             collector=CarrierHtmlCollector(),
-            out_csv=OUT_CARRIER_HTML_CSV,
-            out_report=OUT_CARRIER_HTML_REPORT,
+            out_csv=_out(OUT_CARRIER_HTML_CSV),
+            out_report=_out(OUT_CARRIER_HTML_REPORT),
         ),
         AtsGroup(
             ats_name="classnk_static_html",
             companies=classnk_static_html_items,
             collector=ClassNkStaticHtmlCollector(),
-            out_csv=OUT_CLASSNK_STATIC_HTML_CSV,
-            out_report=OUT_CLASSNK_STATIC_HTML_REPORT,
+            out_csv=_out(OUT_CLASSNK_STATIC_HTML_CSV),
+            out_report=_out(OUT_CLASSNK_STATIC_HTML_REPORT),
         ),
         AtsGroup(
             ats_name="aibel_html_hr_manager",
             companies=aibel_html_hr_manager_items,
             collector=AibelHtmlHrManagerCollector(),
-            out_csv=OUT_AIBEL_HTML_HR_MANAGER_CSV,
-            out_report=OUT_AIBEL_HTML_HR_MANAGER_REPORT,
+            out_csv=_out(OUT_AIBEL_HTML_HR_MANAGER_CSV),
+            out_report=_out(OUT_AIBEL_HTML_HR_MANAGER_REPORT),
         ),
         AtsGroup(
             ats_name="sitefinity",
             companies=sitefinity_items,
             collector=SitefinityCollector(),
-            out_csv=OUT_SITEFINITY_CSV,
-            out_report=OUT_SITEFINITY_REPORT,
+            out_csv=_out(OUT_SITEFINITY_CSV),
+            out_report=_out(OUT_SITEFINITY_REPORT),
+        ),
+        AtsGroup(
+            ats_name="jobstreet_company_page",
+            companies=jobstreet_company_page_items,
+            collector=JobStreetCompanyPageCollector(),
+            out_csv=_out(OUT_JOBSTREET_COMPANY_PAGE_CSV),
+            out_report=_out(OUT_JOBSTREET_COMPANY_PAGE_REPORT),
+        ),
+        AtsGroup(
+            ats_name="icims",
+            companies=icims_items,
+            collector=IcimsCollector(),
+            out_csv=_out(OUT_ICIMS_CSV),
+            out_report=_out(OUT_ICIMS_REPORT),
+        ),
+        AtsGroup(
+            ats_name="recruiterpal_api",
+            companies=recruiterpal_api_items,
+            collector=RecruiterpalApiCollector(),
+            out_csv=_out(OUT_RECRUITERPAL_API_CSV),
+            out_report=_out(OUT_RECRUITERPAL_API_REPORT),
+        ),
+        AtsGroup(
+            ats_name="syngenta_api",
+            companies=syngenta_api_items,
+            collector=SyngentaApiCollector(),
+            out_csv=_out(OUT_SYNGENTA_API_CSV),
+            out_report=_out(OUT_SYNGENTA_API_REPORT),
+        ),
+        AtsGroup(
+            ats_name="wordpress_simple_job_board",
+            companies=wordpress_simple_job_board_items,
+            collector=WordpressSimpleJobBoardCollector(),
+            out_csv=_out(OUT_WORDPRESS_SIMPLE_JOB_BOARD_CSV),
+            out_report=_out(OUT_WORDPRESS_SIMPLE_JOB_BOARD_REPORT),
+        ),
+        AtsGroup(
+            ats_name="ineos_html",
+            companies=ineos_html_items,
+            collector=IneosHtmlCollector(),
+            out_csv=_out(OUT_INEOS_HTML_CSV),
+            out_report=_out(OUT_INEOS_HTML_REPORT),
+        ),
+        AtsGroup(
+            ats_name="croda_api",
+            companies=croda_api_items,
+            collector=CrodaApiCollector(),
+            out_csv=_out(OUT_CRODA_API_CSV),
+            out_report=_out(OUT_CRODA_API_REPORT),
+        ),
+        AtsGroup(
+            ats_name="teknorapex_html",
+            companies=teknorapex_html_items,
+            collector=TeknorApexHtmlCollector(),
+            out_csv=_out(OUT_TEKNORAPEX_HTML_CSV),
+            out_report=_out(OUT_TEKNORAPEX_HTML_REPORT),
+        ),
+        AtsGroup(
+            ats_name="onecruiter_iframe",
+            companies=onecruiter_iframe_items,
+            collector=OnecruiterIframeCollector(),
+            out_csv=_out(OUT_ONECRUITER_IFRAME_CSV),
+            out_report=_out(OUT_ONECRUITER_IFRAME_REPORT),
         ),
         AtsGroup(
             ats_name="enermech_workable",
             companies=enermech_workable_items,
             collector=EnermechWorkableCollector(),
-            out_csv=_ATS_OUTDIR + "enermech_workable_jobs_batch2.csv",
-            out_report=_ATS_OUTDIR + "enermech_workable_report_batch2.json",
+            out_csv=_out(_ATS_OUTDIR + "enermech_workable_jobs_batch2.csv"),
+            out_report=_out(_ATS_OUTDIR + "enermech_workable_report_batch2.json"),
         ),
         AtsGroup(
             ats_name="saipem_ncore",
             companies=saipem_ncore_items,
             collector=SaipemNcoreCollector(),
-            out_csv=_ATS_OUTDIR + "saipem_ncore_jobs_batch2.csv",
-            out_report=_ATS_OUTDIR + "saipem_ncore_report_batch2.json",
+            out_csv=_out(_ATS_OUTDIR + "saipem_ncore_jobs_batch2.csv"),
+            out_report=_out(_ATS_OUTDIR + "saipem_ncore_report_batch2.json"),
         ),
     ]
 
@@ -615,111 +733,52 @@ def _build_groups(
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Main function to run batch collection for all supported ATS groups."""
-
-    parser = argparse.ArgumentParser(description="Run ATS batch collection (batch2).")
+    """Main function to run ATS collection for a custom Excel input."""
+    parser = argparse.ArgumentParser(
+        prog="python -m src.runners.run_pipeline",
+        description="Run ATS pipeline for a custom Excel input.",
+    )
+    parser.add_argument(
+        "--input",
+        required=True,
+        help="Pfad zur Kunden-Excel (z.B. data/input/client_x.xlsx)",
+    )
     parser.add_argument(
         "--only",
         default=os.environ.get("ATS_ONLY"),
         help="Comma-separated ATS names to run (e.g. jobsyn_solr,avature)",
     )
-    parser.add_argument(
-        "--priority",
-        default=os.environ.get("ATS_PRIORITY"),
-        help="Comma-separated ATS names to run first (overrides default priority list)",
-    )
-    parser.add_argument(
-        "--stop-after-priority",
-        action="store_true",
-        default=(os.environ.get("ATS_STOP_AFTER_PRIORITY", "").strip().lower() in {"1", "true", "yes"}),
-        help="Run priority ATS groups first, then exit (skip the rest)",
-    )
-    parser.add_argument(
-        "--only-priority",
-        action="store_true",
-        default=(os.environ.get("ATS_ONLY_PRIORITY", "").strip().lower() in {"1", "true", "yes"}),
-        help="Run only priority ATS groups (skip everything else)",
-    )
-    parser.add_argument(
-        "--group-workers",
-        type=int,
-        default=_env_int("ATS_GROUP_WORKERS"),
-        help="Override max concurrent ATS groups (default scales with CPU count)",
-    )
-    parser.add_argument(
-        "--company-workers",
-        type=int,
-        default=_env_int("ATS_COMPANY_WORKERS"),
-        help="Override per-ATS company worker pool size",
-    )
-    parser.add_argument(
-        "--skip-report",
-        action="store_true",
-        default=(os.environ.get("ATS_SKIP_REPORT", "").strip().lower() in {"1", "true", "yes"}),
-        help="Skip JSON report export to speed up quick reruns",
-    )
-    parser.add_argument(
-        "--skip-merge",
-        action="store_true",
-        default=(os.environ.get("ATS_SKIP_MERGE", "").strip().lower() in {"1", "true", "yes"}),
-        help="Skip merge_All_jobs after collection",
-    )
-    parser.add_argument(
-        "--fast-mode",
-        action="store_true",
-        default=_env_bool("ATS_FAST_MODE"),
-        help="Enable aggressive speed optimizations in collectors (may skip some enrich steps)",
-    )
-    parser.add_argument(
-        "--no-cache",
-        action="store_true",
-        default=_env_bool("ATS_NO_CACHE"),
-        help="Disable HTTP detail caching during collection",
-    )
-    parser.add_argument(
-        "--cache-dir",
-        default=os.environ.get("ATS_CACHE_DIR", "data/cache"),
-        help="Folder for transient collector caches",
-    )
-    parser.add_argument(
-        "--cache-ttl",
-        type=int,
-        default=_env_int("ATS_CACHE_TTL"),
-        help="Seconds to reuse cached detail fetches (default 900)",
-    )
-    parser.add_argument(
-        "--passes",
-        type=int,
-        default=_env_int("ATS_PASSES") or 3,
-        help="How many sequential collection passes to run (default 3)",
-    )
     args = parser.parse_args(argv)
 
     only_set = set(_parse_csv_list(args.only)) if args.only else None
-    group_workers = args.group_workers if args.group_workers and args.group_workers > 0 else None
-    company_workers = args.company_workers if args.company_workers and args.company_workers > 0 else None
-    skip_report = bool(args.skip_report)
-    skip_merge = bool(args.skip_merge)
-    fast_mode = bool(args.fast_mode)
-    use_cache = not bool(args.no_cache)
-    cache_dir = (args.cache_dir or "data/cache") if use_cache else None
-    cache_ttl = args.cache_ttl if (args.cache_ttl is not None and args.cache_ttl >= 0) else 900
-    passes = max(1, int(args.passes or 1))
 
-    priority = _parse_csv_list(args.priority)
-    if not priority:
-        priority = DEFAULT_PRIORITY_ATS
+    # Fixed defaults for simplified CLI
+    group_workers = None
+    company_workers = None
+    use_cache = True
+    cache_dir = "data/cache"
+    cache_ttl = 900
+    passes = 3
 
-    # 1) Load companies
-    items = load_companies(MASTER_INPUT)
+    priority = DEFAULT_PRIORITY_ATS
+
+    # Create run-scoped output paths derived from input filename,
+    # so each input writes to its own folder.
+    run_name = os.path.splitext(os.path.basename(args.input))[0].strip() or "run"
+    run_root = os.path.join("data", "output", run_name)
+    ats_outdir = os.path.join(run_root, "ats_runs")
+    merged_xlsx = os.path.join(run_root, "all_jobs.xlsx")
+    zero_vacancies_csv = os.path.join(run_root, "companies_with_zero_vacancies.csv")
+    os.makedirs(ats_outdir, exist_ok=True)
+
+    # 1) Load companies from provided Excel
+    items = load_companies(args.input)
 
     # 2) Build groups
-    groups = _build_groups(items=items)
+    groups = _build_groups(items=items, ats_outdir=ats_outdir)
 
     # 3) Filter and order
-    if args.only_priority:
-        groups = [g for g in groups if g.ats_name in set(priority)]
-    elif only_set is not None:
+    if only_set is not None:
         groups = [g for g in groups if g.ats_name in only_set]
 
     groups = [g for g in groups if g.companies]
@@ -776,8 +835,6 @@ def main(argv: list[str] | None = None) -> None:
                         out_report=group.out_report,
                         progress=progress,
                         company_workers=company_workers,
-                        skip_report=skip_report,
-                        fast_mode=fast_mode,
                         cache_dir=cache_dir,
                         use_cache=use_cache,
                         cache_ttl=cache_ttl,
@@ -816,7 +873,7 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     # --- Schreibe alle Unternehmen mit zero vacancies in eine CSV ---
-    out_zero_vacancies = "data/output/companies_with_zero_vacancies.csv"
+    out_zero_vacancies = zero_vacancies_csv
     import csv
     with open(out_zero_vacancies, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -827,7 +884,7 @@ def main(argv: list[str] | None = None) -> None:
     width = shutil.get_terminal_size(fallback=(80, 20)).columns
     summary_line = "-" * max(20, width)
     tqdm.write(summary_line)
-    tqdm.write(f"{BATCH_LABEL} finished")
+    tqdm.write("Pipeline finished")
     tqdm.write(summary_line)
     tqdm.write(f"Collectors run: {collectors_completed}")
     tqdm.write(f"Total jobs: {total_jobs}")
@@ -839,8 +896,8 @@ def main(argv: list[str] | None = None) -> None:
         )
     )
     tqdm.write(summary_line)
-    tqdm.write(f"CSV folder: {_ATS_OUTDIR}")
-    tqdm.write(f"XLSX: {MERGED_XLSX}")
+    tqdm.write(f"CSV folder: {ats_outdir}")
+    tqdm.write(f"XLSX: {merged_xlsx}")
     if ats_durations:
         tqdm.write(summary_line)
         tqdm.write("Slowest ATS groups (top 5):")
@@ -850,15 +907,25 @@ def main(argv: list[str] | None = None) -> None:
     tqdm.write(summary_line)
     tqdm.write(f"Elapsed: {total_elapsed:.1f}s")
     tqdm.write(summary_line)
-    if fast_mode or (cache_dir is not None and use_cache) or passes != 1:
+    if (cache_dir is not None and use_cache) or passes != 1:
         cache_state = "on" if cache_dir is not None and use_cache else "off"
         tqdm.write(
-            f"Options: fast_mode={'on' if fast_mode else 'off'} | cache={cache_state} (ttl={cache_ttl}s) | passes={passes}"
+            f"Options: fast_mode=off | cache={cache_state} (ttl={cache_ttl}s) | passes={passes}"
         )
         tqdm.write(summary_line)
 
-    if not skip_merge:
-        subprocess.run([sys.executable, "-m", "src.runners.merge_All_jobs"], check=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.runners.merge_All_jobs",
+            "--input-dir",
+            ats_outdir,
+            "--out",
+            merged_xlsx,
+        ],
+        check=True,
+    )
 
 
 def _backfill_company_column_in_csv(csv_path: str, companies: list) -> None:
@@ -923,8 +990,6 @@ def run_one_ats(
     out_report: str,
     progress: tqdm | None = None,
     company_workers: int | None = None,
-    skip_report: bool = False,
-    fast_mode: bool = False,
     cache_dir: str | None = None,
     use_cache: bool = True,
     cache_ttl: int = 900,
@@ -938,10 +1003,6 @@ def run_one_ats(
     if cache_enabled and effective_cache_dir:
         os.makedirs(effective_cache_dir, exist_ok=True)
 
-    try:
-        setattr(collector, "fast_mode", bool(fast_mode))
-    except Exception:
-        pass
     try:
         setattr(collector, "cache_enabled", cache_enabled)
         setattr(collector, "cache_dir", effective_cache_dir)
@@ -1020,17 +1081,16 @@ def run_one_ats(
     export_records_csv(records_after_dedupe, out_csv)
 
     # 7) Build + export report
-    if not skip_report:
-        report = build_report(
-            records_before_dedupe=normalized_job_records,
-            records_after_dedupe=records_after_dedupe,
-            validation_stats=validation_stats,
-            per_company_counts=per_company_counts,
-            input_total_companies=items_total,
-            selected_companies=len(companies),
-            ats_name=ats_name,
-        )
-        export_report_json(report, out_report)
+    report = build_report(
+        records_before_dedupe=normalized_job_records,
+        records_after_dedupe=records_after_dedupe,
+        validation_stats=validation_stats,
+        per_company_counts=per_company_counts,
+        input_total_companies=items_total,
+        selected_companies=len(companies),
+        ats_name=ats_name,
+    )
+    export_report_json(report, out_report)
 
     status_counts = Counter()
     if not update_status:
