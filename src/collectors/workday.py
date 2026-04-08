@@ -23,6 +23,7 @@ COMPANY_FACET_OVERRIDES: Dict[str, Dict[str, str]] = {
     "Rockwell Automation": {"facet_key": "locationCountry", "facet_value": SG_COUNTRY_ID},
     "KSB": {"facet_key": "locationCountry", "facet_value": SG_COUNTRY_ID},
     "Sulzer": {"facet_key": "locationCountry", "facet_value": SG_COUNTRY_ID},
+    "AIR LIQUIDE SINGAPORE PRIVATE LIMITED": {"facet_key": "locationCountry", "facet_value": SG_COUNTRY_ID},
 }
 
 # Pre-compile regex patterns for performance (avoids recompiling on every job)
@@ -158,9 +159,20 @@ class WorkdayCollector(BaseCollector):
             # Parse the careers URL to extract two key URLs (one for API, one for public site):
             endpoint, public_base = _derive_workday_urls(resolved_url)
 
-            # Special case: Rolls-Royce Power Systems (MTU) uses URL facets for filtering (e.g. ?Location_Country=80938777cac5440fab50d729f9634969) 
+            # Special cases: some tenants already encode the filtering in the URL
+            # (e.g. "?Location_Country=..." or "?locations=..."). In these
+            # cases we reuse the URL query as Workday facets instead of trying
+            # to guess the right facet key.
             url_facets = None
-            if company.company == "Rolls-Royce Power Systems (MTU)":
+            if company.company in {
+                "Rolls-Royce Power Systems (MTU)",
+                "AIR LIQUIDE SINGAPORE PRIVATE LIMITED",
+                "EVONIK PTE LTD",
+                "TEE HAI CHEM PTE LTD",
+                "MITSUBISHI CHEMICAL METHACRYLATES SINGAPORE PTE. LTD.",
+                "AIR PRODUCTS (SINGAPORE) ENERGY PTE. LTD.",
+                "CHEVRON SINGAPORE PTE. LTD.",
+            }:
                 url_facets = parse_qs(urlparse(company.careers_url).query)
 
             # Start session in order to reuse HTTP connections

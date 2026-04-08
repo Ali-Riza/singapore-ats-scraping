@@ -193,6 +193,11 @@ def _should_keep_company_job(company_name: str, job_url: str, location: str) -> 
     if c in {"sulzer", "endress+hauser", "rina"}:
         return ("singapore" in loc) or ("/singapore" in u) or ("singapore-" in u)
 
+    # Neste: observed to return global roles even when using location=SG.
+    # Restrict to jobs that clearly indicate Singapore via location or URL.
+    if "neste" in c:
+        return ("singapore" in loc) or ("/singapore" in u) or ("singapore-" in u)
+
     return True
 
 

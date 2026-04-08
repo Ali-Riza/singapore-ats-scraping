@@ -94,5 +94,22 @@ def pick_collector(item: CompanyItem) -> str:
         return "enermech_workable"
     if ats == "saipem_ncore":
         return "saipem_ncore"
-
+    if ats == "jobstreet_company_page":
+        return "jobstreet_company_page"
+    if ats == "icims":
+        return "icims"
+    if ats == "recruiterpal_api":
+        return "recruiterpal_api"
+    if ats == "syngenta_api":
+        return "syngenta_api"
+    if ats == "wordpress_simple_job_board":
+        return "wordpress_simple_job_board"
+    if ats == "ineos_html":
+        return "ineos_html"
+    if ats == "croda_api":
+        return "croda_api"
+    if ats == "teknorapex_html":
+        return "teknorapex_html"
+    if ats == "onecruiter_iframe":
+        return "onecruiter_iframe"
     return "skip"
