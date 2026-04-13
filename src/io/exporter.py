@@ -26,6 +26,7 @@ CSV_FIELDS: List[str] = [
     "job_url",
     "source",
     "careers_url",
+    "run_date",
     "status",  # Status-Spalte für Merge
 ]
 

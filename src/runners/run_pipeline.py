@@ -10,6 +10,7 @@ import sys
 import time
 from collections import Counter  # For counting per-company jobs
 from concurrent.futures import ThreadPoolExecutor, as_completed  # For parallel collection of companies
+from datetime import date, datetime
 from typing import Dict, Tuple
 
 
@@ -40,23 +41,70 @@ def read_jobs_csv(path: str) -> Dict[str, dict]:
     return jobs
 
 
-def compare_job_status(previous_csv: str, current_csv: str) -> Dict[str, Tuple[str, dict]]:
+def _parse_posted_date_to_date(raw: object) -> date | None:
+    """Parses a raw posted date string into a date object."""
+    s = str(raw or "").strip()
+    if not s or s.upper() == "NONE":
+        return None
+
+    # Prefer normalized format (YYYY-MM-DD).
+    if len(s) >= 10:
+        head = s[:10]
+        try:
+            return date.fromisoformat(head)
+        except ValueError:
+            pass
+
+    # Fallback for alternate formats seen in some feeds.
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%d/%m/%Y", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+
+    return None
+
+
+def _is_new_by_posted_date(row: dict, last_run_date: date, current_run_date: date) -> bool:
+    """ Determines if a job is 'New' based on its posted_date field compared to last and current run dates."""
+    posted = _parse_posted_date_to_date(row.get("posted_date"))
+    if posted is None:
+        return False
+    return last_run_date <= posted <= current_run_date
+
+
+def compare_job_status(
+    previous_csv: str,
+    current_csv: str,
+    *,
+    last_run_date: date,
+    current_run_date: date,
+) -> Dict[str, Tuple[str, dict]]:
     """
     Vergleicht previous.csv und current.csv und gibt ein Dict mit Job-ID -> (Status, Datensatz) zurück.
     Status: 'New', 'Closed', 'Open'
+    New ist datumsbasiert:
+      1) posted_date existiert
+      2) posted_date >= last_run_date
+      3) posted_date <= current_run_date
     """
     prev_jobs = read_jobs_csv(previous_csv)
     curr_jobs = read_jobs_csv(current_csv)
     prev_ids = set(prev_jobs.keys())
     curr_ids = set(curr_jobs.keys())
 
+    # Vergleiche die beiden Sätze und bestimme den Status jedes Jobs
     status_dict = {}
-    for jobid in curr_ids - prev_ids:
-        status_dict[jobid] = ("New", curr_jobs[jobid])
     for jobid in prev_ids - curr_ids:
         status_dict[jobid] = ("Closed", prev_jobs[jobid])
-    for jobid in prev_ids & curr_ids:
-        status_dict[jobid] = ("Open", curr_jobs[jobid])
+
+    for jobid in curr_ids:
+        row = curr_jobs[jobid]
+        if _is_new_by_posted_date(row, last_run_date, current_run_date):
+            status_dict[jobid] = ("New", row)
+        else:
+            status_dict[jobid] = ("Open", row)
+
     return status_dict
 
 
@@ -173,6 +221,20 @@ def _previous_csv_path(out_csv: str) -> str:
         if candidate and candidate != out_csv:
             return candidate
     return out_csv + ".previous"
+
+
+def _read_last_run_date_from_csv(csv_path: str) -> date | None:
+    try:
+        with open(csv_path, newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                parsed = _parse_posted_date_to_date(row.get("run_date"))
+                if parsed is not None:
+                    return parsed
+    except (FileNotFoundError, OSError, TypeError, ValueError):
+        return None
+
+    return None
 
 OUT_ORACLE_CSV = _ATS_OUTDIR + "oracle_jobs_.csv"
 OUT_ORACLE_REPORT = _ATS_OUTDIR + "oracle_report_.json"
@@ -1130,10 +1192,14 @@ def run_one_ats(
     with open(current_csv, newline="", encoding="utf-8-sig") as f:
         current_rows = list(csv.DictReader(f))
 
+    current_run_date = date.today()
+    current_run_date_str = current_run_date.isoformat()
+
     if not os.path.exists(previous_csv):
         # Erster Lauf: Alle als New markieren und current als previous speichern
         for row in current_rows:
             row["status"] = "New"
+            row["run_date"] = current_run_date_str
         _write_current_with_status(current_rows)
         if previous_csv != current_csv:
             prev_dir = os.path.dirname(previous_csv) or "."
@@ -1145,7 +1211,16 @@ def run_one_ats(
         # Dataset aus New/Open/Closed-Jobs. Dabei werden auch bereits geschlossene
         # Listings aus previous.csv weiterhin mit Status=Closed in die aktuelle
         # CSV übernommen (historische Speicherung).
-        status_dict = compare_job_status(previous_csv, current_csv)
+        last_run_date = _read_last_run_date_from_csv(previous_csv)
+        if last_run_date is None:
+            # Backward compatibility for older CSVs without run_date.
+            last_run_date = date.fromtimestamp(os.path.getmtime(previous_csv))
+        status_dict = compare_job_status(
+            previous_csv,
+            current_csv,
+            last_run_date=last_run_date,
+            current_run_date=current_run_date,
+        )
 
         if not status_dict:
             # Keine Jobs insgesamt – leere Struktur, aber previous.csv in Sync halten
@@ -1159,6 +1234,7 @@ def run_one_ats(
             for jobid, (status, row) in status_dict.items():
                 row_out = dict(row)
                 row_out["status"] = status
+                row_out["run_date"] = current_run_date_str
                 rows_with_status.append(row_out)
 
             _write_current_with_status(rows_with_status)
