@@ -15,26 +15,45 @@ from typing import Dict, Tuple
 
 
 def get_job_id(record: dict) -> str:
-    # Versuche, eine stabile Job-ID zu nehmen, sonst Fallback auf Company+Title+Location+URL
-    for key in ("job_id", "id", "JobID", "JobId", "Job_ID"):  # mögliche Varianten
-        if key in record and record[key]:
-            return str(record[key]).strip()
-    # Fallback: Company, Title, Location, URL
-    return "|".join([
-        str(record.get("company", "")).strip(),
-        str(record.get("title", "")).strip(),
-        str(record.get("location", "")).strip(),
-        str(record.get("url", "")).strip(),
-    ])
+    """Return a stable identifier for status comparisons.
+
+    We intentionally prefer a deterministic key based on company + job title.
+    Some sources generate unstable job_id values across runs (hashes, transient
+    IDs), which would create false duplicates and 'Closed' misclassifications.
+
+    Note: our exported CSV schema uses job_title/job_url (not title/url).
+    """
+
+    company = str(record.get("company", "") or "").strip()
+    title = str(record.get("job_title") or record.get("title") or "").strip()
+    if company and title:
+        return f"{company}|{title}"
+
+    # Strict mode: we do not fall back to URL or vendor IDs, because that would
+    # reintroduce instability across runs and cause false Closed/Open flips.
+    raise ValueError(
+        "Missing required fields for stable status key (need company + job_title). "
+        f"Present keys: {sorted(record.keys())}"
+    )
 
 
 def read_jobs_csv(path: str) -> Dict[str, dict]:
     jobs = {}
     try:
-        with open(path, newline="", encoding="utf-8") as f:
+        # CSVs are written as utf-8-sig to help Excel. Using utf-8-sig here
+        # avoids a BOM leaking into the first header (e.g. '\ufeffcompany').
+        with open(path, newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                jobid = get_job_id(row)
+                try:
+                    jobid = get_job_id(row)
+                except ValueError as exc:
+                    logging.getLogger(__name__).warning(
+                        "Skipping row without stable status key in %s (%s)",
+                        path,
+                        exc,
+                    )
+                    continue
                 jobs[jobid] = row
     except FileNotFoundError:
         pass
@@ -810,6 +829,7 @@ def main(argv: list[str] | None = None) -> None:
         default=os.environ.get("ATS_ONLY"),
         help="Comma-separated ATS names to run (e.g. jobsyn_solr,avature)",
     )
+
     args = parser.parse_args(argv)
 
     only_set = set(_parse_csv_list(args.only)) if args.only else None
@@ -1196,16 +1216,17 @@ def run_one_ats(
     current_run_date_str = current_run_date.isoformat()
 
     if not os.path.exists(previous_csv):
-        # Erster Lauf: Alle als New markieren und current als previous speichern
+        # First run (or after a reset): write a consistent status column.
+        first_status = "New"
         for row in current_rows:
-            row["status"] = "New"
+            row["status"] = first_status
             row["run_date"] = current_run_date_str
         _write_current_with_status(current_rows)
         if previous_csv != current_csv:
             prev_dir = os.path.dirname(previous_csv) or "."
             os.makedirs(prev_dir, exist_ok=True)
             shutil.copy(current_csv, previous_csv)
-        status_counts["New"] = len(current_rows)
+        status_counts[first_status] = len(current_rows)
     else:
         # Vergleiche previous.csv und current.csv und baue ein vereinheitlichtes
         # Dataset aus New/Open/Closed-Jobs. Dabei werden auch bereits geschlossene

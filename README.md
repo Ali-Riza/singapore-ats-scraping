@@ -56,7 +56,7 @@ Operational constraints
 ```bash
 python -m pip install -r requirements.txt
 python -m playwright install chromium
-python -m src.runners.run_batch3 
+python -m src.runners.run_pipeline --input data/input/<your_excel>.xlsx
 
 ```
 
