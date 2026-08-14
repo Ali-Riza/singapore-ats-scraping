@@ -112,4 +112,9 @@ def pick_collector(item: CompanyItem) -> str:
         return "teknorapex_html"
     if ats == "onecruiter_iframe":
         return "onecruiter_iframe"
+    if ats == "amgen":
+        return "amgen"
+    if ats == "talentbrew":
+        # Alias for TalentBrew-based sites handled by the Amgen collector.
+        return "amgen"
     return "skip"

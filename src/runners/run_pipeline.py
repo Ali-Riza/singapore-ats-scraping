@@ -203,6 +203,7 @@ from src.collectors.ineos_html import IneosHtmlCollector
 from src.collectors.croda_api import CrodaApiCollector
 from src.collectors.teknorapex_html import TeknorApexHtmlCollector
 from src.collectors.onecruiter_iframe import OnecruiterIframeCollector
+from src.collectors.amgen import AmgenCollector
 # Add EnerMech and Saipem collectors
 from src.collectors.enermech_workable import EnermechWorkableCollector
 from src.collectors.saipem_ncore import SaipemNcoreCollector
@@ -381,6 +382,9 @@ OUT_TEKNORAPEX_HTML_REPORT = _ATS_OUTDIR + "teknorapex_html_report_.json"
 OUT_ONECRUITER_IFRAME_CSV = _ATS_OUTDIR + "onecruiter_iframe_jobs_.csv"
 OUT_ONECRUITER_IFRAME_REPORT = _ATS_OUTDIR + "onecruiter_iframe_report_.json"
 
+OUT_AMGEN_CSV = _ATS_OUTDIR + "amgen_jobs_.csv"
+OUT_AMGEN_REPORT = _ATS_OUTDIR + "amgen_report_.json"
+
 # Run these ATS groups first (so you can validate new collectors quickly).
 # You can override via CLI: `--priority ats1,ats2`.
 DEFAULT_PRIORITY_ATS = [
@@ -472,6 +476,7 @@ def _build_groups(
     croda_api_items = [it for it in items if pick_collector(it) == "croda_api"]
     teknorapex_html_items = [it for it in items if pick_collector(it) == "teknorapex_html"]
     onecruiter_iframe_items = [it for it in items if pick_collector(it) == "onecruiter_iframe"]
+    amgen_items = [it for it in items if pick_collector(it) == "amgen"]
 
     hibob_items = [it for it in items if pick_collector(it) == "hibob"]
     jobsyn_solr_items = [it for it in items if pick_collector(it) == "jobsyn_solr"]
@@ -793,6 +798,13 @@ def _build_groups(
             collector=OnecruiterIframeCollector(),
             out_csv=_out(OUT_ONECRUITER_IFRAME_CSV),
             out_report=_out(OUT_ONECRUITER_IFRAME_REPORT),
+        ),
+        AtsGroup(
+            ats_name="amgen",
+            companies=amgen_items,
+            collector=AmgenCollector(),
+            out_csv=_out(OUT_AMGEN_CSV),
+            out_report=_out(OUT_AMGEN_REPORT),
         ),
         AtsGroup(
             ats_name="enermech_workable",
