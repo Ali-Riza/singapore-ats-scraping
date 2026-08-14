@@ -117,4 +117,10 @@ def pick_collector(item: CompanyItem) -> str:
     if ats == "talentbrew":
         # Alias for TalentBrew-based sites handled by the Amgen collector.
         return "amgen"
+    if ats == "arup_selectminds":
+        return "arup_selectminds"
+    if ats == "selectminds":
+        return "arup_selectminds"
+    if ats == "taleo_selectminds":
+        return "arup_selectminds"
     return "skip"
