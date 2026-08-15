@@ -100,6 +100,8 @@ def pick_collector(item: CompanyItem) -> str:
         return "icims"
     if ats == "recruiterpal_api":
         return "recruiterpal_api"
+    if ats == "smartrecruiters_api":
+        return "smartrecruiters_api"
     if ats == "syngenta_api":
         return "syngenta_api"
     if ats == "wordpress_simple_job_board":

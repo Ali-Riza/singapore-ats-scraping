@@ -197,6 +197,7 @@ from src.collectors.sitefinity import SitefinityCollector
 from src.collectors.jobstreet_company_page import JobStreetCompanyPageCollector
 from src.collectors.icims import IcimsCollector
 from src.collectors.recruiterpal_api import RecruiterpalApiCollector
+from src.collectors.smartrecruiters_api import SmartRecruitersApiCollector
 from src.collectors.syngenta_api import SyngentaApiCollector
 from src.collectors.wordpress_simple_job_board import WordpressSimpleJobBoardCollector
 from src.collectors.ineos_html import IneosHtmlCollector
@@ -472,6 +473,7 @@ def _build_groups(
     ]
     icims_items = [it for it in items if pick_collector(it) == "icims"]
     recruiterpal_api_items = [it for it in items if pick_collector(it) == "recruiterpal_api"]
+    smartrecruiters_api_items = [it for it in items if pick_collector(it) == "smartrecruiters_api"]
     syngenta_api_items = [it for it in items if pick_collector(it) == "syngenta_api"]
     wordpress_simple_job_board_items = [
         it for it in items if pick_collector(it) == "wordpress_simple_job_board"
@@ -761,6 +763,13 @@ def _build_groups(
             collector=RecruiterpalApiCollector(),
             out_csv=_out(OUT_RECRUITERPAL_API_CSV),
             out_report=_out(OUT_RECRUITERPAL_API_REPORT),
+        ),
+        AtsGroup(
+            ats_name="smartrecruiters_api",
+            companies=smartrecruiters_api_items,
+            collector=SmartRecruitersApiCollector(),
+            out_csv=_out(_ATS_OUTDIR + "smartrecruiters_api_jobs_.csv"),
+            out_report=_out(_ATS_OUTDIR + "smartrecruiters_api_report_.json"),
         ),
         AtsGroup(
             ats_name="syngenta_api",
