@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, urljoin, urldefrag, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urldefrag, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -65,6 +65,68 @@ def _fetch_html(session: requests.Session, url: str, timeout_s: int = 30) -> str
     return response.text
 
 
+def _url_with_offset(url: str, offset: int) -> str:
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["jobOffset"] = str(offset)
+    return urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
+
+
+def _parse_markdown_listing(markdown: str) -> List[Dict[str, str]]:
+    lines = markdown.splitlines()
+    results: List[Dict[str, str]] = []
+    link_pattern = re.compile(r"^### \[(?P<title>.+?)\]\((?P<url>https?://[^)]+/JobDetail/[^)]+)\)\s*$")
+    for index, line in enumerate(lines):
+        match = link_pattern.match(line.strip())
+        if not match:
+            continue
+        job_url = match.group("url")
+        folder_id = _extract_folder_id(job_url)
+        if not folder_id:
+            continue
+        summary = ""
+        for following_line in lines[index + 1 :]:
+            summary = _clean_text(following_line)
+            if summary:
+                break
+        location = summary.partition(folder_id)[0].strip() if folder_id in summary else ""
+        results.append(
+            {
+                "folder_id": folder_id,
+                "job_id": folder_id,
+                "job_title": _clean_text(match.group("title")),
+                "job_url": job_url,
+                "listing_location": location,
+            }
+        )
+    return results
+
+
+def _fetch_listing_items(session: requests.Session, url: str, timeout_s: int = 30) -> List[Dict[str, str]]:
+    response = session.get(url, timeout=timeout_s)
+    response.raise_for_status()
+    if response.status_code != 202:
+        return _parse_listing(response.text, url)
+
+    items: List[Dict[str, str]] = []
+    offset = 0
+    while offset < 10_000:
+        page_url = url if offset == 0 else _url_with_offset(url, offset)
+        fallback = requests.get(f"https://r.jina.ai/{page_url}", timeout=timeout_s)
+        fallback.raise_for_status()
+        page_items = _parse_markdown_listing(fallback.text)
+        if not page_items:
+            break
+        items.extend(page_items)
+
+        range_match = re.search(r"(\d+)-(\d+) of (\d+) results", fallback.text, re.IGNORECASE)
+        if not range_match or int(range_match.group(2)) >= int(range_match.group(3)):
+            break
+        offset = int(range_match.group(2))
+
+    return items
+
+
 def _extract_folder_id(url: str) -> str:
     raw = (url or "").strip()
     if not raw:
@@ -101,7 +163,8 @@ def _parse_listing(html: str, page_url: str) -> List[Dict[str, str]]:
     soup = BeautifulSoup(html, "html.parser")
 
     results: List[Dict[str, str]] = []
-    for anchor in soup.select("a.article__header__focusable[href]"):
+    selector = "a.article__header__focusable[href], article a[href*='/JobDetail/']"
+    for anchor in soup.select(selector):
         title = _clean_text(anchor.get_text(" ", strip=True))
         href = (anchor.get("href") or "").strip()
         if not href or not title:
@@ -113,12 +176,17 @@ def _parse_listing(html: str, page_url: str) -> List[Dict[str, str]]:
         if not folder_id:
             continue
 
+        article = anchor.find_parent("article")
+        location_node = article.select_one(".list-item-location") if article else None
+        listing_location = _clean_text(location_node.get_text(" ", strip=True)) if location_node else ""
+
         results.append(
             {
                 "folder_id": folder_id,
                 "job_id": folder_id,
                 "job_title": title,
                 "job_url": absolute,
+                "listing_location": listing_location,
             }
         )
 
@@ -272,8 +340,8 @@ class AvatureCollector(BaseCollector):
 
         try:
             with _make_session() as session:
-                listing_html = _fetch_html(session, listing_url, timeout_s=30)
-                listing_items = _parse_listing(listing_html, listing_url)
+                listing_items = _fetch_listing_items(session, listing_url, timeout_s=30)
+                listing_items = list({item["folder_id"]: item for item in listing_items}.values())
                 meta["listing_items"] = len(listing_items)
 
                 if not listing_items:
@@ -307,6 +375,7 @@ class AvatureCollector(BaseCollector):
                 def fetch_fields(item: Dict[str, str]) -> Optional[Dict[str, Any]]:
                     folder_id = item.get("folder_id") or ""
                     job_url = item.get("job_url") or ""
+                    listing_location = item.get("listing_location") or ""
                     if not folder_id:
                         return None
 
@@ -320,13 +389,17 @@ class AvatureCollector(BaseCollector):
                         meta["skipped_non_sg"] += 1
                         return None
 
-                    try:
-                        fields = _fetch_jobinfo_fields(session, listing_url=listing_url, folder_id=folder_id, timeout_s=30)
-                        meta["jobinfo_attempts"] += 1
-                    except Exception:
-                        return None
+                    fields: Dict[str, str] = {}
+                    if not listing_location:
+                        try:
+                            fields = _fetch_jobinfo_fields(
+                                session, listing_url=listing_url, folder_id=folder_id, timeout_s=30
+                            )
+                            meta["jobinfo_attempts"] += 1
+                        except Exception:
+                            return None
 
-                    location = _build_location(fields)
+                    location = _build_location(fields) or listing_location
                     country = fields.get("Country / Region") or ""
 
                     keep = "singapore" in location.lower() or "singapore" in (country or "").lower()
@@ -343,7 +416,7 @@ class AvatureCollector(BaseCollector):
                     if keep:
                         if detail_html:
                             posted_date = _extract_posted_date_from_folderdetail(detail_html)
-                        elif job_url and not fast_mode:
+                        elif job_url and not fast_mode and not listing_location:
                             try:
                                 detail_html = _fetch_html(session, job_url, timeout_s=30)
                                 posted_date = _extract_posted_date_from_folderdetail(detail_html)
