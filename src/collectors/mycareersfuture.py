@@ -14,6 +14,7 @@ from src.core.models import CompanyItem, CollectResult, JobRecord
 
 PORTAL_BASE_URL = "https://www.mycareersfuture.gov.sg"
 API_BASE_URL = "https://api.mycareersfuture.gov.sg"
+_UEN_RE = re.compile(r"(?:\d{8,9}|[ST]\d{2}[A-Z]{2}\d{4})[A-Z]", re.IGNORECASE)
 
 
 def _clean_text(v: Any) -> str:
@@ -64,13 +65,14 @@ def _extract_uen(careers_url: str, raw_data_row: Dict[str, Any]) -> Optional[str
     except Exception:
         pass
 
-    # Path segment that looks like a UEN (9 digits + 1 letter, case-insensitive)
+    # Path segment that looks like a Singapore UEN. Besides numeric legacy
+    # formats, other entities use values such as S81FC2987D.
     try:
         path = urlparse(s).path or ""
         # Split on both '/' and '-' to catch endings like ...-202321711W
         for part in re.split(r"[/-]+", path):
             part = part.strip()
-            if re.fullmatch(r"\d{9}[A-Za-z]", part):
+            if _UEN_RE.fullmatch(part):
                 return part.upper()
     except Exception:
         pass
