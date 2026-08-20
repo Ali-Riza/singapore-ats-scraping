@@ -3,8 +3,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urldefrag, urljoin, urlparse
+from xml.etree import ElementTree
 
 import requests
 from bs4 import BeautifulSoup
@@ -14,7 +16,7 @@ from src.collectors.base import BaseCollector
 from src.core.models import CompanyItem, CollectResult, JobRecord
 
 
-_JOB_ID_RE = re.compile(r"/(\d{6,})/?$")
+_JOB_ID_RE = re.compile(r"/(\d+)(?:-[A-Za-z]{2}_[A-Za-z]{2})?/?$")
 
 
 def _clean_text(s: str) -> str:
@@ -22,7 +24,8 @@ def _clean_text(s: str) -> str:
 
 
 def _extract_job_id_from_url(job_url: str) -> str:
-    m = _JOB_ID_RE.search((job_url or "").strip())
+    path = urlparse((job_url or "").strip()).path
+    m = _JOB_ID_RE.search(path)
     return m.group(1) if m else ""
 
 
@@ -190,7 +193,7 @@ def _should_keep_company_job(company_name: str, job_url: str, location: str) -> 
         return ("singapore" in loc) or ("/singapore" in u) or ("singapore-" in u)
 
     # These tenants sometimes ignore or mis-handle URL filters. Keep SG only.
-    if c in {"sulzer", "endress+hauser", "rina"}:
+    if c in {"sulzer", "endress+hauser", "rina", "paxocean"}:
         return ("singapore" in loc) or ("/singapore" in u) or ("singapore-" in u)
 
     # Neste: observed to return global roles even when using location=SG.
@@ -223,6 +226,149 @@ def _canonical_listing_url(company: CompanyItem) -> Optional[str]:
         return f"{base}/other-countries/search/?q=&sortColumn=referencedate&sortDirection=desc"
 
     return None
+
+
+def _category_id_from_url(careers_url: str) -> Optional[str]:
+    parsed = urlparse(careers_url)
+    match = re.search(r"/go/[^/]+/(\d+)/?", parsed.path, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def _category_rss_url(careers_url: str) -> Optional[str]:
+    parsed = urlparse(careers_url)
+    category_id = _category_id_from_url(careers_url)
+    if not category_id or not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}/services/rss/category/?catid={category_id}"
+
+
+def _parse_recruiting_api_job(response: Dict[str, Any], base_url: str, locale: str) -> Optional[Dict[str, Any]]:
+    job_id = _clean_text(str(response.get("id") or ""))
+    title = _clean_text(str(response.get("unifiedStandardTitle") or ""))
+    url_title = _clean_text(str(response.get("unifiedUrlTitle") or response.get("urlTitle") or ""))
+    if not job_id or not title or not url_title:
+        return None
+
+    locations = response.get("jobLocationShort")
+    location = ""
+    if isinstance(locations, list) and locations:
+        location = _clean_text(re.sub(r"<br\s*/?>", "", str(locations[0]), flags=re.IGNORECASE))
+
+    posted_date = ""
+    date_text = _clean_text(str(response.get("unifiedStandardStart") or ""))
+    if date_text:
+        try:
+            posted_date = datetime.strptime(date_text, "%d/%m/%Y").date().isoformat()
+        except ValueError:
+            posted_date = date_text
+
+    return {
+        "title": title,
+        "job_url": f"{base_url}/job/{url_title}/{job_id}-{locale}",
+        "location": location,
+        "posted_date": posted_date,
+    }
+
+
+def _fetch_category_api(
+    session: requests.Session, careers_url: str, timeout: int = 30
+) -> Tuple[List[Dict[str, Any]], List[int], int]:
+    parsed = urlparse(careers_url)
+    category_id = _category_id_from_url(careers_url)
+    if not category_id or not parsed.scheme or not parsed.netloc:
+        return [], [], 0
+
+    page_response = session.get(careers_url, timeout=timeout)
+    page_response.raise_for_status()
+    token_match = re.search(r'var CSRFToken = "([^"]+)"', page_response.text)
+    if not token_match:
+        return [], [page_response.status_code], 0
+
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+    endpoint = f"{base_url}/services/recruiting/v1/jobs"
+    locale = "en_GB"
+    jobs: List[Dict[str, Any]] = []
+    statuses = [page_response.status_code]
+    total_jobs = 0
+
+    for page_number in range(200):
+        payload = {
+            "locale": locale,
+            "pageNumber": page_number,
+            "sortBy": "",
+            "keywords": "",
+            "location": "",
+            "facetFilters": {},
+            "brand": "",
+            "skills": [],
+            "categoryId": int(category_id),
+            "alertId": "",
+            "rcmCandidateId": "",
+        }
+        response = session.post(
+            endpoint,
+            json=payload,
+            headers={"X-CSRF-Token": token_match.group(1), "Origin": base_url, "Referer": careers_url},
+            timeout=timeout,
+        )
+        statuses.append(response.status_code)
+        response.raise_for_status()
+        data = response.json()
+        total_jobs = int(data.get("totalJobs") or 0)
+        page_results = data.get("jobSearchResult")
+        if not isinstance(page_results, list) or not page_results:
+            break
+        for item in page_results:
+            raw_response = item.get("response") if isinstance(item, dict) else None
+            if not isinstance(raw_response, dict):
+                continue
+            job = _parse_recruiting_api_job(raw_response, base_url, locale)
+            if job:
+                jobs.append(job)
+        if len(jobs) >= total_jobs:
+            break
+
+    return jobs, statuses, total_jobs
+
+
+def _parse_category_rss(xml: bytes) -> Tuple[List[Dict[str, Any]], bool]:
+    root = ElementTree.fromstring(xml)
+    raw_jobs: List[Dict[str, Any]] = []
+    no_jobs_available = False
+
+    for item in root.findall(".//item"):
+        title = _clean_text(item.findtext("title") or "")
+        job_url = _clean_text(item.findtext("link") or "")
+        if title.casefold().startswith("no jobs currently available"):
+            no_jobs_available = True
+            continue
+        if not title or not job_url or not _extract_job_id_from_url(job_url):
+            continue
+
+        location = ""
+        title_match = re.match(r"^(?P<title>.+) \((?P<location>[^()]*,[^()]*)\)$", title)
+        if title_match:
+            title = _clean_text(title_match.group("title"))
+            location = _clean_text(title_match.group("location"))
+
+        posted_date = ""
+        date_text = item.findtext("pubDate")
+        if date_text:
+            try:
+                posted_date = parsedate_to_datetime(date_text.strip()).date().isoformat()
+            except (TypeError, ValueError):
+                posted_date = ""
+
+        raw_jobs.append(
+            {
+                "title": title,
+                "job_url": job_url,
+                "location": location,
+                "posted_date": posted_date,
+            }
+        )
+
+    return raw_jobs, no_jobs_available
 
 
 @dataclass(frozen=True)
@@ -474,6 +620,24 @@ class SuccessFactorsCollector(BaseCollector):
             meta["pages"] = combined_pages
             meta["pagination_urls_found"] = combined_pagination_found
             meta["attempted_start_urls"] = attempted_starts
+
+            if not raw_jobs and _category_id_from_url(company.careers_url):
+                try:
+                    api_jobs, api_statuses, api_total = _fetch_category_api(session, company.careers_url)
+                    meta["status_codes"].extend(api_statuses)
+                    meta["category_api_total"] = api_total
+                    raw_jobs = api_jobs
+                except Exception as exc:
+                    meta["category_api_error"] = str(exc)
+
+            rss_url = _category_rss_url(company.careers_url)
+            if not raw_jobs and rss_url:
+                rss_response = session.get(rss_url, timeout=30)
+                meta["status_codes"].append(rss_response.status_code)
+                rss_response.raise_for_status()
+                raw_jobs, no_jobs_available = _parse_category_rss(rss_response.content)
+                meta["rss_category_url"] = rss_url
+                meta["rss_no_jobs_available"] = no_jobs_available
 
             # Optional: for rows with missing posted_date, fetch detail pages best-effort.
             # Keep this bounded to avoid too many requests.
