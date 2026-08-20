@@ -160,6 +160,7 @@ from tqdm import tqdm
 from src.io.loaders import load_companies  # Load companies from Excel
 from src.collectors.registry import pick_collector  # Pick collector based on company item
 from src.collectors.oracle import OracleCollector  # Oracle collector
+from src.collectors.wsp import WspCollector
 from src.collectors.eightfold import EightfoldCollector  # Eightfold collector
 from src.collectors.algolia import AlgoliaCollector  # Algolia collector
 from src.collectors.cornerstone import CornerstoneCollector  # Cornerstone collector
@@ -260,6 +261,9 @@ def _read_last_run_date_from_csv(csv_path: str) -> date | None:
 
 OUT_ORACLE_CSV = _ATS_OUTDIR + "oracle_jobs_.csv"
 OUT_ORACLE_REPORT = _ATS_OUTDIR + "oracle_report_.json"
+
+OUT_WSP_CSV = _ATS_OUTDIR + "wsp_jobs_.csv"
+OUT_WSP_REPORT = _ATS_OUTDIR + "wsp_report_.json"
 
 OUT_WORKDAY_CSV = _ATS_OUTDIR + "workday_jobs_.csv"
 OUT_WORKDAY_REPORT = _ATS_OUTDIR + "workday_report_.json"
@@ -457,6 +461,7 @@ def _build_groups(
         return os.path.join(ats_outdir, os.path.basename(path))
 
     oracle_items = [it for it in items if pick_collector(it) == "oracle"]
+    wsp_items = [it for it in items if pick_collector(it) == "wsp"]
     workday_items = [it for it in items if pick_collector(it) == "workday"]
     phenom_items = [it for it in items if pick_collector(it) == "phenom"]
     successfactors_items = [it for it in items if pick_collector(it) == "successfactors"]
@@ -517,6 +522,13 @@ def _build_groups(
             collector=OracleCollector(),
             out_csv=_out(OUT_ORACLE_CSV),
             out_report=_out(OUT_ORACLE_REPORT),
+        ),
+        AtsGroup(
+            ats_name="wsp",
+            companies=wsp_items,
+            collector=WspCollector(),
+            out_csv=_out(OUT_WSP_CSV),
+            out_report=_out(OUT_WSP_REPORT),
         ),
         AtsGroup(
             ats_name="workday",

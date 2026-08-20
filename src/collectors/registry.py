@@ -17,6 +17,8 @@ def pick_collector(item: CompanyItem) -> str:
     # Keep the input data (ats_type) canonicalized to one of these values.
     if ats == "oracle":
         return "oracle"
+    if ats == "wsp":
+        return "wsp"
     if ats == "workday":
         return "workday"
     if ats == "phenom":
