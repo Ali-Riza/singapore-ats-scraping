@@ -28,6 +28,15 @@ HONEYWELL_LOCATION_LABEL = "Singapore"
 HONEYWELL_LOCATION_LEVEL = "country"
 HONEYWELL_MODE = "location"
 
+ORACLE_REST_BASE_BY_UI_HOST = {
+    "careers.ti.com": "https://edbz.fa.us2.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions",
+    "www.stolt-nielsen.com": "https://eclo.fa.em2.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions",
+}
+
+ORACLE_SITE_BY_UI_HOST = {
+    "www.stolt-nielsen.com": "CX_1",
+}
+
 EXPAND = (
     "requisitionList.workLocation,"
     "requisitionList.otherWorkLocations,"
@@ -83,6 +92,32 @@ class OracleCollector(BaseCollector):
         }
 
         try:
+            if (urlparse(company.careers_url).netloc or "").lower().endswith("selectminds.com"):
+                from src.collectors.arup_selectminds import ArupSelectMindsCollector
+
+                delegated = ArupSelectMindsCollector().collect_raw(company)
+                raw_jobs = [
+                    {
+                        "Id": job.get("job_id"),
+                        "Title": job.get("job_title"),
+                        "PostedDate": job.get("posted_date"),
+                        "externalUrl": job.get("job_url"),
+                        "workLocation": [{"LocationName": job.get("location") or "Singapore"}],
+                    }
+                    for job in delegated.raw_jobs
+                ]
+                meta.update(delegated.meta)
+                meta["total_raw"] = len(raw_jobs)
+                meta["delegated_collector"] = delegated.collector
+                return CollectResult(
+                    collector=self.name,
+                    company=company.company,
+                    careers_url=company.careers_url,
+                    raw_jobs=raw_jobs,
+                    meta=meta,
+                    error=delegated.error,
+                )
+
             # Extract parameters (siteNumber, locationMode, locationValue, restBase) from the jobs page URL 
             site = _site_number_from_ui(company.careers_url)
             location_mode, location_value = _location_from_ui(company.careers_url)
@@ -178,6 +213,10 @@ class OracleCollector(BaseCollector):
                 offset += limit
 
             # Finalize meta information
+            if _requires_singapore_filter(company):
+                before_filter = len(raw_jobs)
+                raw_jobs = [job for job in raw_jobs if _job_has_singapore_location(job)]
+                meta["filtered_non_singapore"] = before_filter - len(raw_jobs)
             meta["total_raw"] = len(raw_jobs)
 
             # Return successful CollectResult (raw collection only)
@@ -218,15 +257,7 @@ class OracleCollector(BaseCollector):
         )
         title = self._pick(raw, "Title", "title", "requisitionTitle")
         posted_date = self._pick(raw, "PostedDate", "postedDate", "postingDate", "PostingDate")
-        location = ""
-        wl = raw.get("workLocation")
-        if isinstance(wl, list) and wl:
-            first = wl[0]
-            if isinstance(first, dict):
-                location = self._pick(first, "LocationName", "locationName", "Name", "name")
-        elif isinstance(wl, dict):
-            # falls ein anderer Tenant doch dict liefert
-            location = self._pick(wl, "LocationName", "locationName", "Name", "name")
+        location = _preferred_location(raw)
 
         # Honeywell requirement: always use "Singapore" as the location label.
         ui = urlparse(result.careers_url)
@@ -293,12 +324,14 @@ class OracleCollector(BaseCollector):
 def _site_number_from_ui(jobs_page_url: str) -> str:
     """ Extracts the siteNumber from the jobs UI URL."""
     u = urlparse(jobs_page_url)
-    q = parse_qs(u.query)
+    q = _ui_query(jobs_page_url)
     if "siteNumber" in q and q["siteNumber"]:
         return q["siteNumber"][0]
 
     # parts like: ["careers", "sites", "12345", "jobsearch"]
     parts = [p for p in u.path.split("/") if p]
+    fragment_path = u.fragment.split("?", 1)[0]
+    parts.extend(p for p in fragment_path.split("/") if p)
     # Find "sites" and get the next part as siteNumber
     if "sites" in parts:
         # Get index of "sites"
@@ -312,20 +345,24 @@ def _site_number_from_ui(jobs_page_url: str) -> str:
                     return HONEYWELL_DEFAULT_SITE_NUMBER
             return site  # siteNumber increment
 
-    return "1"
+    return ORACLE_SITE_BY_UI_HOST.get((u.netloc or "").lower(), "1")
 
 
 def _location_from_ui(jobs_page_url: str) -> tuple[str, str]:
     """ Extracts location mode and value from the jobs UI URL."""
 
     # extract query parameters 
-    q = parse_qs(urlparse(jobs_page_url).query)
+    q = _ui_query(jobs_page_url)
 
     # Check known location parameters
     if "selectedLocationsFacet" in q:
         return "selectedLocationsFacet", q["selectedLocationsFacet"][0]
     if "locationId" in q:
         return "locationId", q["locationId"][0]
+    if "selectedLocationLevel1Facet" in q:
+        # The modern UI sends this facet to a protected POST endpoint. The
+        # legacy public endpoint accepts the same ID as locationId.
+        return "locationId", q["selectedLocationLevel1Facet"][0]
 
     return "", ""
 
@@ -333,7 +370,7 @@ def _location_from_ui(jobs_page_url: str) -> tuple[str, str]:
 def _rest_base_from_ui(jobs_page_url: str) -> str:
     """ Constructs the base REST API URL (json endpoint) from the jobs UI URL."""
     u = urlparse(jobs_page_url)
-    q = parse_qs(u.query)
+    q = _ui_query(jobs_page_url)
 
     # Explicit override (full URL or host).
     for key in (
@@ -358,7 +395,88 @@ def _rest_base_from_ui(jobs_page_url: str) -> str:
     if (u.netloc or "").lower() in HONEYWELL_UI_HOSTS:
         return HONEYWELL_DEFAULT_REST_BASE
 
+    mapped_base = ORACLE_REST_BASE_BY_UI_HOST.get((u.netloc or "").lower())
+    if mapped_base:
+        return mapped_base
+
     return f"{u.scheme}://{u.netloc}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+
+
+def _ui_query(jobs_page_url: str) -> Dict[str, List[str]]:
+    parsed = urlparse(jobs_page_url)
+    query = parse_qs(parsed.query)
+    if "?" in parsed.fragment:
+        fragment_query = parse_qs(parsed.fragment.split("?", 1)[1])
+        query.update(fragment_query)
+    return query
+
+
+def _requires_singapore_filter(company: CompanyItem) -> bool:
+    company_name = (company.company or "").strip().casefold()
+    if company_name in {"si group", "texas instruments"}:
+        return True
+    location_values = _ui_query(company.careers_url).get("location") or []
+    return any("singapore" in value.casefold() for value in location_values)
+
+
+def _location_dicts(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+    locations: List[Dict[str, Any]] = []
+    for key in ("workLocation", "otherWorkLocations", "secondaryLocations"):
+        value = raw.get(key)
+        if isinstance(value, dict):
+            locations.append(value)
+        elif isinstance(value, list):
+            locations.extend(item for item in value if isinstance(item, dict))
+    return locations
+
+
+def _location_text(location: Dict[str, Any]) -> str:
+    fields = (
+        "LocationName",
+        "locationName",
+        "Name",
+        "name",
+        "TownOrCity",
+        "townOrCity",
+        "Country",
+        "country",
+    )
+    return " ".join(str(location.get(field) or "") for field in fields).strip()
+
+
+def _location_name(location: Dict[str, Any]) -> str:
+    for key in ("LocationName", "locationName", "Name", "name"):
+        value = location.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def _job_has_singapore_location(raw: Dict[str, Any]) -> bool:
+    for key in ("PrimaryLocation", "PrimaryLocationCountry"):
+        if "singapore" in str(raw.get(key) or "").casefold():
+            return True
+    return any("singapore" in _location_text(location).casefold() for location in _location_dicts(raw))
+
+
+def _preferred_location(raw: Dict[str, Any]) -> str:
+    primary = str(raw.get("PrimaryLocation") or "").strip()
+    if "singapore" in primary.casefold():
+        return primary
+
+    locations = _location_dicts(raw)
+    for location in locations:
+        if "singapore" in _location_text(location).casefold():
+            return _location_name(location) or "Singapore"
+
+    if primary:
+        return primary
+    for location in locations:
+        value = _location_name(location)
+        if value:
+            return value
+    return ""
+
 
 def _build_finder(
     site: str,
