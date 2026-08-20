@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, List
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 import re
 
 import requests
@@ -48,6 +48,10 @@ class ArupSelectMindsCollector(BaseCollector):
         }
 
         start_url = (company.careers_url or "").strip() or DEFAULT_START_URL
+        parsed_start = urlparse(start_url)
+        base_url = f"{parsed_start.scheme}://{parsed_start.netloc}"
+        if parsed_start.netloc.endswith("selectminds.com") and parsed_start.path.rstrip("/") == "":
+            start_url = f"{base_url}/latest-jobs"
 
         try:
             with requests.Session() as session:
@@ -73,6 +77,7 @@ class ArupSelectMindsCollector(BaseCollector):
                             search_id=search_id,
                             page_index=page_index,
                             tss_token=tss_token,
+                            base_url=base_url,
                         )
                         meta["status"].append(status_code)
                         if status_code != 200:
@@ -84,7 +89,7 @@ class ArupSelectMindsCollector(BaseCollector):
 
                 seen: set[str] = set()
                 for row in all_rows:
-                    parsed = self._parse_job_row(row, start_url)
+                    parsed = self._parse_job_row(row, start_url, base_url)
                     if not parsed:
                         continue
 
@@ -178,16 +183,17 @@ class ArupSelectMindsCollector(BaseCollector):
         search_id: str,
         page_index: int,
         tss_token: str,
+        base_url: str,
     ) -> tuple[List[Tag], int]:
         uid = int(datetime.now().timestamp() * 1000) % 1000
         ajax_url = (
-            f"{BASE_URL}/ajax/content/landingpage_job_results"
+            f"{base_url}/ajax/content/landingpage_job_results"
             f"?JobSearch.id={search_id}&page_index={page_index}&uid={uid}"
         )
 
         ajax_headers = {
             "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Origin": BASE_URL,
+            "Origin": base_url,
             "Referer": start_url,
             "X-Requested-With": "XMLHttpRequest",
         }
@@ -207,7 +213,7 @@ class ArupSelectMindsCollector(BaseCollector):
         page_soup = BeautifulSoup(html, "lxml")
         return list(page_soup.select("div.job_list_row")), status_code
 
-    def _parse_job_row(self, row: Tag, careers_url: str) -> Dict[str, Any] | None:
+    def _parse_job_row(self, row: Tag, careers_url: str, base_url: str = BASE_URL) -> Dict[str, Any] | None:
         link = row.select_one("a.job_link")
         if not isinstance(link, Tag):
             return None
@@ -217,7 +223,7 @@ class ArupSelectMindsCollector(BaseCollector):
         if not title or not rel_url:
             return None
 
-        job_url = urljoin(BASE_URL, rel_url)
+        job_url = urljoin(base_url, rel_url)
 
         job_id = ""
         row_id = (row.get("id") or "").strip()
