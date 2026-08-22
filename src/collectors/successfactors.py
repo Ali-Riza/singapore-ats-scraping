@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
-from urllib.parse import urldefrag, urljoin, urlparse
+from urllib.parse import parse_qs, urldefrag, urljoin, urlparse
 from xml.etree import ElementTree
 
 import requests
@@ -21,6 +21,16 @@ _JOB_ID_RE = re.compile(r"/(\d+)(?:-[A-Za-z]{2}_[A-Za-z]{2})?/?$")
 
 def _clean_text(s: str) -> str:
     return " ".join((s or "").split()).strip()
+
+
+def _clean_lines(s: str) -> str:
+    """Collapse whitespace within each line but keep the line breaks.
+
+    Multi-location jobs are represented as newline-separated locations; the
+    downstream normalizer uses those newlines to pick the Singapore entry.
+    """
+    lines = [_clean_text(ln) for ln in (s or "").splitlines()]
+    return "\n".join(ln for ln in lines if ln)
 
 
 def _extract_job_id_from_url(job_url: str) -> str:
@@ -249,17 +259,37 @@ def _parse_recruiting_api_job(response: Dict[str, Any], base_url: str, locale: s
     if not job_id or not title or not url_title:
         return None
 
+    # Jobs can be posted for several locations. Keep all of them (newline-joined)
+    # so downstream normalization can recognize Singapore even when it isn't first.
     locations = response.get("jobLocationShort")
     location = ""
     if isinstance(locations, list) and locations:
-        location = _clean_text(re.sub(r"<br\s*/?>", "", str(locations[0]), flags=re.IGNORECASE))
+        parts: List[str] = []
+        seen: Set[str] = set()
+        for entry in locations:
+            txt = _clean_text(re.sub(r"<br\s*/?>", " ", str(entry), flags=re.IGNORECASE))
+            # Some tenants return bare ISO-3166 alpha-3 codes ("SGP") instead of
+            # city names. Spell out Singapore so downstream location
+            # normalization can recognize and prefer it.
+            if txt.upper() == "SGP":
+                txt = "Singapore"
+            if not txt or txt in seen:
+                continue
+            seen.add(txt)
+            parts.append(txt)
+        location = "\n".join(parts)
 
     posted_date = ""
     date_text = _clean_text(str(response.get("unifiedStandardStart") or ""))
     if date_text:
-        try:
-            posted_date = datetime.strptime(date_text, "%d/%m/%Y").date().isoformat()
-        except ValueError:
+        # Tenants differ: "13/08/2026" (en_GB) vs "8/13/26" (en_US).
+        for fmt in ("%d/%m/%Y", "%m/%d/%y", "%m/%d/%Y", "%d/%m/%y", "%Y-%m-%d"):
+            try:
+                posted_date = datetime.strptime(date_text, fmt).date().isoformat()
+                break
+            except ValueError:
+                continue
+        else:
             posted_date = date_text
 
     return {
@@ -270,12 +300,55 @@ def _parse_recruiting_api_job(response: Dict[str, Any], base_url: str, locale: s
     }
 
 
-def _fetch_category_api(
+def _recruiting_api_query(careers_url: str) -> Optional[Dict[str, Any]]:
+    """Derive recruiting-API query params from the careers URL.
+
+    Two supported shapes:
+    - ``/go/<name>/<categoryId>/`` -> query by categoryId
+    - ``/search/?q=...&locationsearch=...&locale=...`` -> query by keywords/location
+
+    Newer SuccessFactors tenants render the search results with the client-side
+    ``xweb/rmk-jobs-search`` widget, so there is no ``table#searchresults`` to
+    parse and the HTML crawl yields nothing. Those tenants are served by the
+    same ``/services/recruiting/v1/jobs`` endpoint the category pages use.
+    """
+    parsed = urlparse(careers_url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+
+    category_id = _category_id_from_url(careers_url)
+    if category_id:
+        return {"categoryId": int(category_id)}
+
+    if not re.search(r"/search/?$", parsed.path or ""):
+        return None
+
+    params = parse_qs(parsed.query or "")
+
+    def _first(key: str) -> str:
+        vals = params.get(key) or []
+        return _clean_text(str(vals[0])) if vals else ""
+
+    query: Dict[str, Any] = {
+        "keywords": _first("q") or _first("keywords"),
+        "location": _first("locationsearch") or _first("location"),
+    }
+    locale = _first("locale")
+    if locale:
+        query["locale"] = locale
+
+    # Only worth an API round-trip if the URL actually carries a filter.
+    if not query["keywords"] and not query["location"]:
+        return None
+    return query
+
+
+def _fetch_recruiting_api(
     session: requests.Session, careers_url: str, timeout: int = 30
 ) -> Tuple[List[Dict[str, Any]], List[int], int]:
     parsed = urlparse(careers_url)
-    category_id = _category_id_from_url(careers_url)
-    if not category_id or not parsed.scheme or not parsed.netloc:
+    query = _recruiting_api_query(careers_url)
+    if not query:
         return [], [], 0
 
     page_response = session.get(careers_url, timeout=timeout)
@@ -286,7 +359,7 @@ def _fetch_category_api(
 
     base_url = f"{parsed.scheme}://{parsed.netloc}"
     endpoint = f"{base_url}/services/recruiting/v1/jobs"
-    locale = "en_GB"
+    locale = str(query.pop("locale", None) or "en_GB")
     jobs: List[Dict[str, Any]] = []
     statuses = [page_response.status_code]
     total_jobs = 0
@@ -301,9 +374,9 @@ def _fetch_category_api(
             "facetFilters": {},
             "brand": "",
             "skills": [],
-            "categoryId": int(category_id),
             "alertId": "",
             "rcmCandidateId": "",
+            **query,
         }
         response = session.post(
             endpoint,
@@ -379,6 +452,18 @@ class _ListingJob:
     posted_date: str
 
 
+def _is_no_results_page(soup: BeautifulSoup) -> bool:
+    """Detect the standard J2W "no matches" page.
+
+    When a search yields nothing, SuccessFactors still renders a full
+    ``table#searchresults`` — but filled with "the N most recent jobs posted by
+    <tenant>", which ignore the query entirely (e.g. Pune/Kansas rows for a
+    ``locationsearch=Singapore`` search). The tell is a ``div#noresults`` block
+    above the table, so treat such a page as empty rather than parsing it.
+    """
+    return soup.select_one("div#noresults") is not None
+
+
 def _parse_listing_page(html: str, page_url: str) -> List[_ListingJob]:
     """Parse a SuccessFactors/J2W listing page.
 
@@ -390,6 +475,9 @@ def _parse_listing_page(html: str, page_url: str) -> List[_ListingJob]:
     - date: td.colDate span.jobDate (may be missing)
     """
     soup = _soup(html)
+    if _is_no_results_page(soup):
+        return []
+
     table = soup.select_one("table#searchresults")
     if not table:
         return []
@@ -553,6 +641,12 @@ class SuccessFactorsCollector(BaseCollector):
 
                     listing_jobs = _parse_listing_page(html, url)
 
+                    # An explicit "no matches" page lists unrelated recent jobs as a
+                    # courtesy. Don't harvest those via any fallback path.
+                    if _is_no_results_page(_soup(html)):
+                        local_meta["no_results_page"] = True
+                        continue
+
                     # Fallback for non-table templates: extract job detail URLs.
                     if not listing_jobs:
                         for job_url in _extract_job_urls_from_search_html(html, url):
@@ -602,6 +696,7 @@ class SuccessFactorsCollector(BaseCollector):
             combined_visited: List[str] = []
             combined_pages = 0
             combined_pagination_found = 0
+            saw_no_results_page = False
 
             for start in starts:
                 attempted_starts.append(start)
@@ -610,6 +705,7 @@ class SuccessFactorsCollector(BaseCollector):
                 combined_visited.extend(list(local_meta.get("visited_urls") or []))
                 combined_pages += int(local_meta.get("pages") or 0)
                 combined_pagination_found += int(local_meta.get("pagination_urls_found") or 0)
+                saw_no_results_page = saw_no_results_page or bool(local_meta.get("no_results_page"))
 
                 if local_raw:
                     raw_jobs = local_raw
@@ -620,15 +716,30 @@ class SuccessFactorsCollector(BaseCollector):
             meta["pages"] = combined_pages
             meta["pagination_urls_found"] = combined_pagination_found
             meta["attempted_start_urls"] = attempted_starts
+            if saw_no_results_page:
+                meta["no_results_page"] = True
 
-            if not raw_jobs and _category_id_from_url(company.careers_url):
+            # The search page said outright there are no matches; escalating to the
+            # API or category RSS would only reintroduce unrelated jobs.
+            if not raw_jobs and saw_no_results_page:
+                meta["total_raw"] = 0
+                return CollectResult(
+                    collector=self.name,
+                    company=company.company,
+                    careers_url=company.careers_url,
+                    raw_jobs=[],
+                    meta=meta,
+                    error=None,
+                )
+
+            if not raw_jobs and _recruiting_api_query(company.careers_url):
                 try:
-                    api_jobs, api_statuses, api_total = _fetch_category_api(session, company.careers_url)
+                    api_jobs, api_statuses, api_total = _fetch_recruiting_api(session, company.careers_url)
                     meta["status_codes"].extend(api_statuses)
-                    meta["category_api_total"] = api_total
+                    meta["recruiting_api_total"] = api_total
                     raw_jobs = api_jobs
                 except Exception as exc:
-                    meta["category_api_error"] = str(exc)
+                    meta["recruiting_api_error"] = str(exc)
 
             rss_url = _category_rss_url(company.careers_url)
             if not raw_jobs and rss_url:
@@ -742,7 +853,9 @@ class SuccessFactorsCollector(BaseCollector):
     def _map_one(self, raw: Dict[str, Any], result: CollectResult) -> JobRecord:
         title = _clean_text(str(raw.get("title") or ""))
         job_url = str(raw.get("job_url") or "")
-        location = _clean_text(str(raw.get("location") or ""))
+        # Multi-location jobs are stored newline-separated; keep the line breaks so
+        # downstream normalization can pick the Singapore entry.
+        location = _clean_lines(str(raw.get("location") or ""))
         posted_date = _clean_text(str(raw.get("posted_date") or ""))
 
         job_id = _extract_job_id_from_url(job_url)
