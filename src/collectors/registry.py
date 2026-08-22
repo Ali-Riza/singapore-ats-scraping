@@ -19,6 +19,8 @@ def pick_collector(item: CompanyItem) -> str:
         return "oracle"
     if ats == "wsp":
         return "wsp"
+    if ats == "bertschi":
+        return "bertschi"
     if ats == "workday":
         return "workday"
     if ats == "phenom":

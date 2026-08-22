@@ -161,6 +161,7 @@ from src.io.loaders import load_companies  # Load companies from Excel
 from src.collectors.registry import pick_collector  # Pick collector based on company item
 from src.collectors.oracle import OracleCollector  # Oracle collector
 from src.collectors.wsp import WspCollector
+from src.collectors.bertschi import BertschiCollector
 from src.collectors.eightfold import EightfoldCollector  # Eightfold collector
 from src.collectors.algolia import AlgoliaCollector  # Algolia collector
 from src.collectors.cornerstone import CornerstoneCollector  # Cornerstone collector
@@ -264,6 +265,9 @@ OUT_ORACLE_REPORT = _ATS_OUTDIR + "oracle_report_.json"
 
 OUT_WSP_CSV = _ATS_OUTDIR + "wsp_jobs_.csv"
 OUT_WSP_REPORT = _ATS_OUTDIR + "wsp_report_.json"
+
+OUT_BERTSCHI_CSV = _ATS_OUTDIR + "bertschi_jobs_.csv"
+OUT_BERTSCHI_REPORT = _ATS_OUTDIR + "bertschi_report_.json"
 
 OUT_WORKDAY_CSV = _ATS_OUTDIR + "workday_jobs_.csv"
 OUT_WORKDAY_REPORT = _ATS_OUTDIR + "workday_report_.json"
@@ -462,6 +466,7 @@ def _build_groups(
 
     oracle_items = [it for it in items if pick_collector(it) == "oracle"]
     wsp_items = [it for it in items if pick_collector(it) == "wsp"]
+    bertschi_items = [it for it in items if pick_collector(it) == "bertschi"]
     workday_items = [it for it in items if pick_collector(it) == "workday"]
     phenom_items = [it for it in items if pick_collector(it) == "phenom"]
     successfactors_items = [it for it in items if pick_collector(it) == "successfactors"]
@@ -529,6 +534,13 @@ def _build_groups(
             collector=WspCollector(),
             out_csv=_out(OUT_WSP_CSV),
             out_report=_out(OUT_WSP_REPORT),
+        ),
+        AtsGroup(
+            ats_name="bertschi",
+            companies=bertschi_items,
+            collector=BertschiCollector(),
+            out_csv=_out(OUT_BERTSCHI_CSV),
+            out_report=_out(OUT_BERTSCHI_REPORT),
         ),
         AtsGroup(
             ats_name="workday",
