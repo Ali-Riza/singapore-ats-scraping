@@ -74,15 +74,18 @@ class RecruiterpalApiCollector(BaseCollector):
                 job_url = f"{base}/career/jobs/{board_id}" if board_id else careers_url
                 posted_date = _to_iso_date(_clean(item.get("created_at")) or _clean(item.get("updated_at")))
 
-                raw_jobs.append(
-                    {
-                        "job_title": title,
-                        "location": location or "Singapore",
-                        "job_id": job_id,
-                        "posted_date": posted_date,
-                        "job_url": job_url,
-                    }
-                )
+                if "Singapore" in location:
+                    raw_jobs.append(
+                        {
+                            "job_title": title,
+                            "location": location or "Singapore",
+                            "job_id": job_id,
+                            "posted_date": posted_date,
+                            "job_url": job_url,
+                        }
+                    )
+                else:
+                    continue
 
             meta["count"] = len(raw_jobs)
             return CollectResult(
