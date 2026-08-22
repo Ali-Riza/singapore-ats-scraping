@@ -147,19 +147,63 @@ def _pick(d: Dict[str, Any], keys: List[str], default: Any = None) -> Any:
     return default
 
 
-def _normalize_location(job: Dict[str, Any]) -> str:
-    loc = _pick(job, ["location", "locations", "jobLocation", "job_location"], default=None)
-    if isinstance(loc, str):
-        return _clean_text(loc)
-    if isinstance(loc, list) and loc:
-        first = loc[0]
-        if isinstance(first, str):
-            return _clean_text(first)
-        if isinstance(first, dict):
-            return _clean_text(str(_pick(first, ["name", "displayName", "label"], default="")))
-    if isinstance(loc, dict):
-        return _clean_text(str(_pick(loc, ["name", "displayName", "label"], default="")))
-    return ""
+def _location_strings(job: Dict[str, Any]) -> List[str]:
+    """Collect every location string a position exposes.
+
+    PCSX returns `locations` / `standardizedLocations` as string lists and leaves the
+    singular `location` key null, so multi-location jobs only reveal Singapore here.
+    """
+    out: List[str] = []
+
+    def _add(v: Any) -> None:
+        if isinstance(v, str):
+            s = _clean_text(v)
+            if s:
+                out.append(s)
+        elif isinstance(v, dict):
+            _add(_pick(v, ["name", "displayName", "label", "location"], default=""))
+        elif isinstance(v, list):
+            for x in v:
+                _add(x)
+
+    for key in ("locations", "standardizedLocations", "location", "jobLocation", "job_location"):
+        _add(job.get(key))
+
+    seen: set[str] = set()
+    uniq: List[str] = []
+    for s in out:
+        if s not in seen:
+            seen.add(s)
+            uniq.append(s)
+    return uniq
+
+
+def _matches_location(job: Dict[str, Any], location: str) -> bool:
+    """True when the wanted location appears in any of the job's location strings.
+
+    Eightfold treats `location` as a geo anchor combined with `sort_by=distance`, not as
+    a hard filter, so distance-sorted results trail off into neighbouring countries.
+    """
+    needle = _clean_text(location).casefold()
+    if not needle:
+        return True
+    # "Singapore, Singapore" style anchors: match on the most specific token.
+    needle = needle.split(",")[0].strip() or needle
+    return any(needle in s.casefold() for s in _location_strings(job))
+
+
+def _normalize_location(job: Dict[str, Any], wanted: str = "") -> str:
+    """Prefer the wanted location so multi-location rows don't display a foreign city."""
+    locs = _location_strings(job)
+    if not locs:
+        return ""
+
+    needle = _clean_text(wanted).casefold().split(",")[0].strip()
+    if needle:
+        preferred = [s for s in locs if needle in s.casefold()]
+        if preferred:
+            return " | ".join(preferred)
+    return locs[0]
 
 
 def _posted_date_from_posted_ts(posted_ts: Any) -> Optional[str]:
@@ -213,6 +257,7 @@ class EightfoldCollector(BaseCollector):
             "search_calls": 0,
             "detail_calls": 0,
             "total_raw": 0,
+            "filtered_out": 0,
             "pid": None,
             "domain": None,
             "location": None,
@@ -273,27 +318,39 @@ class EightfoldCollector(BaseCollector):
                     break
 
                 page_added = 0
+                page_matched = 0
                 for j in jobs_raw:
                     job_id = _pick(j, ["id", "jobId", "job_id", "reqId", "requisitionId", "requisition_id"], default=None)
                     job_id = str(job_id) if job_id is not None else ""
                     if not job_id or job_id in seen_ids:
                         continue
                     seen_ids.add(job_id)
+                    page_added += 1
+
+                    # The API ignores `location` as a hard filter, so enforce it client-side.
+                    if not _matches_location(j, location):
+                        meta["filtered_out"] += 1
+                        continue
+                    page_matched += 1
 
                     raw_jobs.append(
                         {
                             "job_id": job_id,
                             "title": _clean_text(str(_pick(j, ["title", "jobTitle", "job_title", "name", "positionTitle", "position_title"], default=""))),
-                            "location": _normalize_location(j),
+                            "location": _normalize_location(j, location),
                             "posted_date": "",
                             "job_url": _job_url_from_id(company.careers_url, job_id),
                             "_search_url": url,
                             "_raw": j,
                         }
                     )
-                    page_added += 1
 
                 if page_added == 0:
+                    break
+
+                # Results are distance-sorted around `location`, so once a full page has no
+                # match at all we are past the wanted area and can stop paging.
+                if page_matched == 0 and sort_by == "distance":
                     break
 
                 # heuristic: stop when small page
