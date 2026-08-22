@@ -45,6 +45,25 @@ def _normalize_date(raw: Any) -> str:
     return txt[:10]
 
 
+def _company_id_from_url(careers_url: str) -> Optional[str]:
+    """Read the tenant id straight off the careers URL.
+
+    careers.smartrecruiters.com/Vitol -> Vitol
+    jobs.smartrecruiters.com/Vitol/744000... -> Vitol
+    """
+    parsed = urlsplit(careers_url)
+    if "smartrecruiters.com" not in (parsed.netloc or "").lower():
+        return None
+    segments = [s for s in (parsed.path or "").split("/") if s]
+    if not segments:
+        return None
+    first = _clean(segments[0])
+    # Skip locale/utility prefixes that precede the tenant slug.
+    if first.lower() in {"jobs", "careers", "en", "en-us", "companies"} and len(segments) > 1:
+        first = _clean(segments[1])
+    return first or None
+
+
 def _company_id_from_html(html: str) -> Optional[str]:
     for pattern in (
         r'data-company-identifier\s*=\s*["\']([^"\']+)',
@@ -70,19 +89,49 @@ def _decode_job_id(raw_url: str) -> str:
     return _clean(candidate)
 
 
+SG_COUNTRY_CODE = "sg"
+
+
 def _extract_work_location(additional_text: str) -> str:
+    """Pull the location out of a listing's ".c-list__additional" text.
+
+    Never invent a location: an unparseable value returns "" so downstream code can
+    drop the row instead of asserting a country the source never stated.
+    """
     text = _clean(additional_text)
     if not text:
-        return "Singapore"
+        return ""
     parts = [part.strip() for part in re.split(r"\s-\s", text) if part.strip()]
     if not parts:
-        return "Singapore"
-    last_part = parts[-1]
-    if last_part.lower() in {"singapore", "sg"}:
-        return "Singapore"
-    if "singapore" in last_part.lower():
-        return "Singapore"
-    return last_part if last_part else "Singapore"
+        return ""
+    return parts[-1]
+
+
+def _location_from_api(location_obj: Any) -> str:
+    """Build a readable location from the v1 postings `location` object."""
+    if not isinstance(location_obj, dict):
+        return _clean(location_obj)
+
+    full = _clean(location_obj.get("fullLocation"))
+    if full:
+        # v1 emits "Singapore, , Singapore" when region is blank.
+        return ", ".join(p for p in (x.strip() for x in full.split(",")) if p)
+
+    parts = [
+        _clean(location_obj.get("city")),
+        _clean(location_obj.get("region")),
+        _clean(location_obj.get("country")).upper(),
+    ]
+    return ", ".join(p for p in parts if p and p.upper() != "NULL")
+
+
+def _is_singapore_location(location_obj: Any, location_text: str = "") -> bool:
+    """True only when the source itself says Singapore."""
+    if isinstance(location_obj, dict):
+        country = _clean(location_obj.get("country")).lower()
+        if country:
+            return country in {SG_COUNTRY_CODE, "singapore"}
+    return "singapore" in (location_text or "").lower()
 
 
 class SmartRecruitersApiCollector(BaseCollector):
@@ -93,7 +142,7 @@ class SmartRecruitersApiCollector(BaseCollector):
         response.raise_for_status()
         return response.text
 
-    def _parse_api_items(self, payload: Any) -> List[Dict[str, Any]]:
+    def _parse_api_items(self, payload: Any, company_id: str = "") -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
         if isinstance(payload, dict):
             container = payload.get("content")
@@ -115,21 +164,31 @@ class SmartRecruitersApiCollector(BaseCollector):
             title = _clean(item.get("title") or item.get("name") or item.get("jobTitle"))
             if not title:
                 continue
-            location = ""
-            location_obj = item.get("location") if isinstance(item.get("location"), dict) else {}
-            if isinstance(location_obj, dict):
-                location = _clean(location_obj.get("city") or location_obj.get("country") or location_obj.get("name"))
+            location_obj = item.get("location")
+            location = _location_from_api(location_obj)
             if not location:
-                location = _clean(item.get("location") or item.get("country") or item.get("city") or item.get("locationName"))
-            if not location:
-                location = "Singapore"
+                location = _clean(item.get("country") or item.get("city") or item.get("locationName"))
+
+            # The source is authoritative: skip anything not in Singapore rather than
+            # relabelling it (this is what produced Brazil/Texas rows tagged "Singapore").
+            if not _is_singapore_location(location_obj, location):
+                continue
+
             job_id = _clean(item.get("id") or item.get("jobId") or item.get("requisitionId"))
             if not job_id:
                 job_id = _clean(item.get("ref") or item.get("postingId"))
             url = _clean(item.get("url") or item.get("applyUrl") or item.get("postingUrl") or item.get("jobUrl") or "")
             if not url:
                 url = _clean(item.get("contentHtmlUrl") or item.get("positionUrl") or "")
-            created_date = _clean(item.get("createdOn") or item.get("datePosted") or item.get("publishedOn"))
+            if not url and company_id and job_id:
+                # v1 omits the public URL; it follows a stable pattern.
+                url = f"https://jobs.smartrecruiters.com/{company_id}/{job_id}"
+            created_date = _clean(
+                item.get("releasedDate")
+                or item.get("createdOn")
+                or item.get("datePosted")
+                or item.get("publishedOn")
+            )
             parsed.append(
                 {
                     "job_title": title,
@@ -161,6 +220,8 @@ class SmartRecruitersApiCollector(BaseCollector):
                     continue
                 detail = item.select_one(".c-list__additional")
                 location = _extract_work_location(detail.get_text(" ", strip=True) if detail else "")
+                if not _is_singapore_location(None, location):
+                    continue
                 job_id = _decode_job_id(url)
                 jobs.append(
                     {
@@ -174,6 +235,8 @@ class SmartRecruitersApiCollector(BaseCollector):
             if jobs:
                 return jobs
 
+        # Bare-anchor fallback: these carry no location markup at all, so we cannot
+        # claim Singapore. Emit an empty location and let validation flag it.
         anchors = soup.select("a[href]")
         seen = set()
         for a in anchors:
@@ -190,7 +253,7 @@ class SmartRecruitersApiCollector(BaseCollector):
             jobs.append(
                 {
                     "job_title": title,
-                    "location": "Singapore",
+                    "location": "",
                     "job_id": _decode_job_id(url),
                     "posted_date": "",
                     "job_url": url,
@@ -226,31 +289,43 @@ class SmartRecruitersApiCollector(BaseCollector):
 
         try:
             html = self._fetch_html(careers_url, headers)
-            company_id = _company_id_from_html(html) or ""
+            company_id = _company_id_from_html(html) or _company_id_from_url(careers_url) or ""
             meta["company_identifier"] = company_id
 
             if company_id:
-                api_url = f"https://api.smartrecruiters.com/companies/{company_id}/postings"
+                # v1 is the public postings API; the unversioned path 404s.
+                api_url = f"https://api.smartrecruiters.com/v1/companies/{company_id}/postings"
                 meta["api_url"] = api_url
-                for page in range(0, 5):
+
+                limit = 100
+                offset = 0
+                for _ in range(0, 20):
                     response = requests.get(
                         api_url,
-                        params={"page": page, "limit": 100},
+                        # `country` is a real server-side filter here, so let the API
+                        # do the work instead of pulling every posting worldwide.
+                        params={"limit": limit, "offset": offset, "country": SG_COUNTRY_CODE},
                         headers={**headers, "Accept": "application/json"},
                         timeout=30,
                     )
+                    meta.setdefault("status_codes", []).append(response.status_code)
                     if response.status_code >= 400:
                         break
                     try:
                         payload = response.json()
                     except ValueError:
                         break
-                    page_items = self._parse_api_items(payload)
-                    if not page_items:
+
+                    returned = payload.get("content") if isinstance(payload, dict) else None
+                    returned_count = len(returned) if isinstance(returned, list) else 0
+                    if isinstance(payload, dict) and payload.get("totalFound") is not None:
+                        meta["total_found"] = payload.get("totalFound")
+
+                    raw_jobs.extend(self._parse_api_items(payload, company_id))
+
+                    if returned_count < limit:
                         break
-                    raw_jobs.extend(page_items)
-                    if len(page_items) < 100:
-                        break
+                    offset += returned_count
                 if raw_jobs:
                     meta["count"] = len(raw_jobs)
                     return CollectResult(
@@ -294,9 +369,7 @@ class SmartRecruitersApiCollector(BaseCollector):
             title = _clean(raw.get("job_title") or raw.get("title"))
             if not title:
                 continue
-            location = _clean(raw.get("location") or raw.get("country") or "Singapore")
-            if not location:
-                location = "Singapore"
+            location = _clean(raw.get("location") or raw.get("country"))
             job_id = _clean(raw.get("job_id") or raw.get("id") or raw.get("requisition_id") or raw.get("job_url") or title)
             job_url = _clean(raw.get("job_url") or raw.get("url") or result.careers_url)
             posted_date = _normalize_date(raw.get("posted_date") or raw.get("created_date") or raw.get("date_posted") or "")
