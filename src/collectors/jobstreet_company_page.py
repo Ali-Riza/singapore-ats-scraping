@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import unquote, urlparse, urlsplit
@@ -15,6 +16,52 @@ APOLLO_MARKER = "window.SEEK_APOLLO_DATA ="
 DEFAULT_BASE_URL = "https://sg.jobstreet.com"
 DEFAULT_SITE_KEY = "SG-Main"
 V5_SEARCH_PATH = "/api/jobsearch/v5/search"
+
+# The v5 endpoint is a keyword search, not a company feed: querying "Micron
+# Technology" also returns postings from contractors that merely mention Micron
+# as a client. Compare the advertiser against the input company so those
+# foreign listings are dropped instead of being relabelled.
+_LEGAL_FORM_TOKENS = frozenset(
+    {
+        "pte", "pty", "ltd", "limited", "llc", "inc", "incorporated", "co",
+        "company", "corp", "corporation", "gmbh", "bv", "nv", "sa", "ag",
+        "plc", "lp", "llp", "holdings", "holding", "group", "international",
+        "global", "asia", "pacific", "apac", "sea", "singapore", "sg",
+        "regional", "and", "the", "of",
+    }
+)
+
+
+def _company_tokens(name: str) -> frozenset:
+    """Reduce a company name to its distinctive tokens for fuzzy comparison."""
+    cleaned = re.sub(r"[^0-9a-z]+", " ", str(name or "").casefold())
+    return frozenset(
+        tok for tok in cleaned.split() if tok and tok not in _LEGAL_FORM_TOKENS
+    )
+
+
+def advertiser_matches_company(advertiser: str, company: str) -> bool:
+    """True if `advertiser` plausibly denotes the same employer as `company`.
+
+    Unknown advertisers are accepted: a missing field is not evidence of a
+    mismatch, and dropping those rows would lose legitimate postings.
+    """
+    adv_tokens = _company_tokens(advertiser)
+    if not adv_tokens:
+        return True
+
+    want_tokens = _company_tokens(company)
+    if not want_tokens:
+        return True
+
+    # Either side may carry extra qualifiers ("Micron Semiconductors Asia" vs
+    # "Micron Technology"), so a subset in either direction counts as a match.
+    if adv_tokens <= want_tokens or want_tokens <= adv_tokens:
+        return True
+
+    # Otherwise require the rarer case of a shared distinctive token, which
+    # covers renamed entities ("Seatrium" / "Seatrium Offshore").
+    return bool(adv_tokens & want_tokens)
 
 
 def parse_v5_job(item: Dict[str, Any], origin: str) -> Optional[Dict[str, Any]]:
@@ -272,7 +319,7 @@ def _parse_jobs_from_apollo_html(html: str) -> List[Dict[str, Any]]:
                 "company": (
                     _nested(raw_job, "advertiser", "name")
                     or (organisation.get("name") if isinstance(organisation, dict) else None)
-                    or "",
+                    or ""
                 ),
                 "posted_date": "",
                 "job_url": job_url,
@@ -400,8 +447,15 @@ class JobStreetCompanyPageCollector(BaseCollector):
 
     def map_to_records(self, result: CollectResult) -> List[JobRecord]:
         records: List[JobRecord] = []
+        dropped = 0
         for raw in result.raw_jobs:
+            advertiser = str(raw.get("company") or "")
+            if not advertiser_matches_company(advertiser, result.company):
+                dropped += 1
+                continue
             records.append(self._map_one(raw, result))
+        if dropped:
+            result.meta["dropped_foreign_advertiser"] = dropped
         return records
 
     def _map_one(self, raw: Dict[str, Any], result: CollectResult) -> JobRecord:
