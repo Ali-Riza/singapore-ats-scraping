@@ -5,7 +5,7 @@ import time
 from datetime import date, timedelta  # Date utilities for normalizing "posted on" dates
 from typing import Any, Dict, List, Optional, Tuple  
 
-from urllib.parse import urlparse  # Parses career URLs to extract Workday endpoints
+from urllib.parse import urlparse, parse_qs  # Parses career URLs to extract Workday endpoints and query parameters
 import requests  # HTTP client for calling Workday JSON APIs
 
 from src.collectors.base import BaseCollector  # Abstract base class that defines collector interface
@@ -159,37 +159,35 @@ class WorkdayCollector(BaseCollector):
             # Parse the careers URL to extract two key URLs (one for API, one for public site):
             endpoint, public_base = _derive_workday_urls(resolved_url)
 
+            # Special cases: some tenants already encode the filtering in the URL
+            # (e.g. "?Location_Country=..." or "?locations=..."). In these
+            # cases we reuse the URL query as Workday facets instead of trying
+            # to guess the right facet key.
+            url_facets = None
+            if company.company in {
+                "Rolls-Royce Power Systems (MTU)",
+                "AIR LIQUIDE SINGAPORE PRIVATE LIMITED",
+                "EVONIK PTE LTD",
+                "TEE HAI CHEM PTE LTD",
+                "MITSUBISHI CHEMICAL METHACRYLATES SINGAPORE PTE. LTD.",
+                "AIR PRODUCTS (SINGAPORE) ENERGY PTE. LTD.",
+                "CHEVRON SINGAPORE PTE. LTD.",
+            }:
+                url_facets = parse_qs(urlparse(company.careers_url).query)
+
             # Start session in order to reuse HTTP connections
             session = requests.Session()
 
             started_at = time.monotonic()
+            # After the first page we lock into a mode to avoid re-trying facet keys on every page.
+            # Modes:
+            # - None: unknown, try to discover a working facet
+            # - "__url_facets__": use url_facets payload
+            # - "__no_facet__": request without facets
+            # - otherwise: facet key string
+            facet_mode: Optional[str] = None
 
             expected_total: Optional[int] = None
-            
-            discovery_payload = {"limit": limit, "offset": offset, "searchText": ""}    
-            discovery_headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; ATS-scraper/1.0)"}
-            discovery_response = session.post(endpoint, json=discovery_payload, headers=discovery_headers, timeout=(5, 20))
-            discovery_response.raise_for_status()
-            discovery_data = discovery_response.json()
-
-            sg_facets = _extract_sg_facets(discovery_data.get("facets"))
-            meta["discovered_facets"] = sg_facets
-
-            # No Singapore facet value means this tenant has no Singapore jobs.
-            # Returning empty here is the point: paginating without a filter
-            # would hand us the entire global job board instead.
-            if not sg_facets:
-                meta["total_raw"] = 0
-                meta["public_site_base"] = public_base
-                meta["endpoint"] = endpoint
-                return CollectResult(
-                    collector=self.name,
-                    company=company.company,
-                    careers_url=company.careers_url,
-                    raw_jobs=[],
-                    meta=meta,
-                    error=None,
-                )
 
             # Paginate through job postings
             for _ in range(max_pages):
@@ -199,16 +197,23 @@ class WorkdayCollector(BaseCollector):
                     meta["time_budget_exceeded"] = True
                     break
                 
-                # Fetch one page, filtered by the facets we discovered above.
+                # Fetch one page
                 data, used_facet_key = _fetch_page(
                     session=session,
                     endpoint=endpoint,
                     company_name=company.company,
                     offset=offset,
                     limit=limit,
-                    url_facets=sg_facets,
-                    fixed_facet_key="__url_facets__",
+                    url_facets=url_facets,
+                    fixed_facet_key=facet_mode,
                 )
+
+                # Lock facet mode after first successful fetch to speed up subsequent pages.
+                if facet_mode is None:
+                    if used_facet_key is None:
+                        facet_mode = "__no_facet__"
+                    else:
+                        facet_mode = used_facet_key
 
                 # Update metadata
                 meta["used_facet_key"] = used_facet_key
@@ -425,71 +430,6 @@ def _pick_job_id(bullet_fields: Any, external_path: Any) -> str:
     return ""
 
 
-def _extract_sg_facets(facets: Any) -> Optional[Dict[str, List[str]]]:
-    """
-    Extract Singapore-related facet IDs from Workday facets structure. 
-    """
-
-    found: Dict[str, List[str]] = {}
-
-    def _walk(nodes: Any) -> None:
-        if not isinstance(nodes, list):
-            return
-
-        for node in nodes:
-            if not isinstance(node, dict):
-                continue
-
-            key = node.get("facetParameter")
-            values = node.get("values") or []
-
-            # Some tenants nest facets one level deeper (e.g. Roche:
-            # locationMainGroup -> locations), so recurse into groups.
-            if values and isinstance(values[0], dict) and "values" in values[0]:
-                _walk(values)
-                continue
-
-            # This facet matches company names ("ECCL Singapore Pte Ltd"),
-            # not locations, so it would filter by employer instead of country.
-            if key == "hiringCompany":
-                continue
-
-            for value in values:
-                if not isinstance(value, dict):
-                    continue
-                descriptor = str(value.get("descriptor") or "")
-                facet_id = value.get("id")
-                if facet_id and "singapore" in descriptor.casefold():
-                    # A tenant can expose several SG values (e.g. MSD lists five
-                    # Singapore sites), and we want jobs from all of them.
-                    found.setdefault(key, []).append(facet_id)
-
-    _walk(facets)
-    if not found:
-        return None
-
-    # Only ever apply ONE facet key: Workday ANDs different keys together, so
-    # combining them narrows the result to the least useful key. Baker Hughes
-    # for example offers locationHierarchy (10 SG jobs) alongside
-    # locationHierarchy1 (0), and asking for both returns nothing.
-    #
-    # Prefer country-level keys over city/site-level ones, because a city key
-    # only covers the sites it happens to list and silently drops SG jobs
-    # elsewhere in the country.
-    def _preference(key: str) -> int:
-        k = (key or "").casefold()
-        if "country" in k:
-            return 0
-        if "hierarchy" in k:
-            return 1
-        if "region" in k or "state" in k or "province" in k:
-            return 2
-        return 3
-
-    best_key = min(found, key=lambda k: (_preference(k), k))
-    return {best_key: found[best_key]}
-
-
 def _fetch_page(
     session: requests.Session,
     endpoint: str,
@@ -617,6 +557,14 @@ def _fetch_page(
 
         # Handle exceptions and continue to next facet key. Exceptions may occur due to HTTP errors or malformed responses.
         except requests.HTTPError as e:
+            
+            # Special case: 400 Bad Request may indicate invalid facet value. Retry without facet.
+            if e.response is not None and e.response.status_code == 400:
+                payload2 = {"limit": limit, "offset": offset, "searchText": ""}
+                r2 = session.post(endpoint, json=payload2, headers=headers, timeout=(5, 20))
+                r2.raise_for_status()
+                return r2.json(), None
+            # Otherwise, store exception and continue
             last_exc = e
             continue
         # Handle other exceptions
