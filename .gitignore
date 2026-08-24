@@ -7,6 +7,9 @@ __pycache__/
 # OS
 .DS_Store
 
+#
+*.xlsx
+
 # Large / generated
 data/output/
 data/cache/ 

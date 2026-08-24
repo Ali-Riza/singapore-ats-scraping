@@ -100,6 +100,8 @@ def pick_collector(item: CompanyItem) -> str:
         return "icims"
     if ats == "recruiterpal_api":
         return "recruiterpal_api"
+    if ats == "smartrecruiters_api":
+        return "smartrecruiters_api"
     if ats == "syngenta_api":
         return "syngenta_api"
     if ats == "wordpress_simple_job_board":
@@ -112,4 +114,15 @@ def pick_collector(item: CompanyItem) -> str:
         return "teknorapex_html"
     if ats == "onecruiter_iframe":
         return "onecruiter_iframe"
+    if ats == "amgen":
+        return "amgen"
+    if ats == "talentbrew":
+        # Alias for TalentBrew-based sites handled by the Amgen collector.
+        return "amgen"
+    if ats == "arup_selectminds":
+        return "arup_selectminds"
+    if ats == "selectminds":
+        return "arup_selectminds"
+    if ats == "taleo_selectminds":
+        return "arup_selectminds"
     return "skip"

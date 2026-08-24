@@ -197,12 +197,15 @@ from src.collectors.sitefinity import SitefinityCollector
 from src.collectors.jobstreet_company_page import JobStreetCompanyPageCollector
 from src.collectors.icims import IcimsCollector
 from src.collectors.recruiterpal_api import RecruiterpalApiCollector
+from src.collectors.smartrecruiters_api import SmartRecruitersApiCollector
 from src.collectors.syngenta_api import SyngentaApiCollector
 from src.collectors.wordpress_simple_job_board import WordpressSimpleJobBoardCollector
 from src.collectors.ineos_html import IneosHtmlCollector
 from src.collectors.croda_api import CrodaApiCollector
 from src.collectors.teknorapex_html import TeknorApexHtmlCollector
 from src.collectors.onecruiter_iframe import OnecruiterIframeCollector
+from src.collectors.amgen import AmgenCollector
+from src.collectors.arup_selectminds import ArupSelectMindsCollector
 # Add EnerMech and Saipem collectors
 from src.collectors.enermech_workable import EnermechWorkableCollector
 from src.collectors.saipem_ncore import SaipemNcoreCollector
@@ -381,6 +384,12 @@ OUT_TEKNORAPEX_HTML_REPORT = _ATS_OUTDIR + "teknorapex_html_report_.json"
 OUT_ONECRUITER_IFRAME_CSV = _ATS_OUTDIR + "onecruiter_iframe_jobs_.csv"
 OUT_ONECRUITER_IFRAME_REPORT = _ATS_OUTDIR + "onecruiter_iframe_report_.json"
 
+OUT_AMGEN_CSV = _ATS_OUTDIR + "amgen_jobs_.csv"
+OUT_AMGEN_REPORT = _ATS_OUTDIR + "amgen_report_.json"
+
+OUT_ARUP_SELECTMINDS_CSV = _ATS_OUTDIR + "arup_selectminds_jobs_.csv"
+OUT_ARUP_SELECTMINDS_REPORT = _ATS_OUTDIR + "arup_selectminds_report_.json"
+
 # Run these ATS groups first (so you can validate new collectors quickly).
 # You can override via CLI: `--priority ats1,ats2`.
 DEFAULT_PRIORITY_ATS = [
@@ -464,6 +473,7 @@ def _build_groups(
     ]
     icims_items = [it for it in items if pick_collector(it) == "icims"]
     recruiterpal_api_items = [it for it in items if pick_collector(it) == "recruiterpal_api"]
+    smartrecruiters_api_items = [it for it in items if pick_collector(it) == "smartrecruiters_api"]
     syngenta_api_items = [it for it in items if pick_collector(it) == "syngenta_api"]
     wordpress_simple_job_board_items = [
         it for it in items if pick_collector(it) == "wordpress_simple_job_board"
@@ -472,6 +482,8 @@ def _build_groups(
     croda_api_items = [it for it in items if pick_collector(it) == "croda_api"]
     teknorapex_html_items = [it for it in items if pick_collector(it) == "teknorapex_html"]
     onecruiter_iframe_items = [it for it in items if pick_collector(it) == "onecruiter_iframe"]
+    amgen_items = [it for it in items if pick_collector(it) == "amgen"]
+    arup_selectminds_items = [it for it in items if pick_collector(it) == "arup_selectminds"]
 
     hibob_items = [it for it in items if pick_collector(it) == "hibob"]
     jobsyn_solr_items = [it for it in items if pick_collector(it) == "jobsyn_solr"]
@@ -753,6 +765,13 @@ def _build_groups(
             out_report=_out(OUT_RECRUITERPAL_API_REPORT),
         ),
         AtsGroup(
+            ats_name="smartrecruiters_api",
+            companies=smartrecruiters_api_items,
+            collector=SmartRecruitersApiCollector(),
+            out_csv=_out(_ATS_OUTDIR + "smartrecruiters_api_jobs_.csv"),
+            out_report=_out(_ATS_OUTDIR + "smartrecruiters_api_report_.json"),
+        ),
+        AtsGroup(
             ats_name="syngenta_api",
             companies=syngenta_api_items,
             collector=SyngentaApiCollector(),
@@ -793,6 +812,20 @@ def _build_groups(
             collector=OnecruiterIframeCollector(),
             out_csv=_out(OUT_ONECRUITER_IFRAME_CSV),
             out_report=_out(OUT_ONECRUITER_IFRAME_REPORT),
+        ),
+        AtsGroup(
+            ats_name="amgen",
+            companies=amgen_items,
+            collector=AmgenCollector(),
+            out_csv=_out(OUT_AMGEN_CSV),
+            out_report=_out(OUT_AMGEN_REPORT),
+        ),
+        AtsGroup(
+            ats_name="arup_selectminds",
+            companies=arup_selectminds_items,
+            collector=ArupSelectMindsCollector(),
+            out_csv=_out(OUT_ARUP_SELECTMINDS_CSV),
+            out_report=_out(OUT_ARUP_SELECTMINDS_REPORT),
         ),
         AtsGroup(
             ats_name="enermech_workable",
