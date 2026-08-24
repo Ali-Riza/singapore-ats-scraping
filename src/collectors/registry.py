@@ -129,4 +129,15 @@ def pick_collector(item: CompanyItem) -> str:
         return "arup_selectminds"
     if ats == "taleo_selectminds":
         return "arup_selectminds"
+    if ats == "vis":
+        return "vis"
+    if ats == "umc":
+        return "umc"
+    if ats == "katoen_natie":
+        return "katoen_natie"
+    if ats == "jurong_engineering":
+        return "jurong_engineering"
+    if ats == "sonar_ats":
+        # Sonar-ATS-based site handled by the Toyo Engineering collector.
+        return "toyo_engineering"
     return "skip"

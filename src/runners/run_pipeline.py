@@ -162,6 +162,11 @@ from src.collectors.registry import pick_collector  # Pick collector based on co
 from src.collectors.oracle import OracleCollector  # Oracle collector
 from src.collectors.wsp import WspCollector
 from src.collectors.bertschi import BertschiCollector
+from src.collectors.vis import VisCollector
+from src.collectors.umc import UmcCollector
+from src.collectors.katoen_natie import KatoenNatieCollector
+from src.collectors.jurong_engineering import JurongEngineeringCollector
+from src.collectors.toyo_engineering import ToyoEngineeringCollector
 from src.collectors.eightfold import EightfoldCollector  # Eightfold collector
 from src.collectors.algolia import AlgoliaCollector  # Algolia collector
 from src.collectors.cornerstone import CornerstoneCollector  # Cornerstone collector
@@ -268,6 +273,21 @@ OUT_WSP_REPORT = _ATS_OUTDIR + "wsp_report_.json"
 
 OUT_BERTSCHI_CSV = _ATS_OUTDIR + "bertschi_jobs_.csv"
 OUT_BERTSCHI_REPORT = _ATS_OUTDIR + "bertschi_report_.json"
+
+OUT_VIS_CSV = _ATS_OUTDIR + "vis_jobs_.csv"
+OUT_VIS_REPORT = _ATS_OUTDIR + "vis_report_.json"
+
+OUT_UMC_CSV = _ATS_OUTDIR + "umc_jobs_.csv"
+OUT_UMC_REPORT = _ATS_OUTDIR + "umc_report_.json"
+
+OUT_KATOEN_NATIE_CSV = _ATS_OUTDIR + "katoen_natie_jobs_.csv"
+OUT_KATOEN_NATIE_REPORT = _ATS_OUTDIR + "katoen_natie_report_.json"
+
+OUT_JURONG_ENGINEERING_CSV = _ATS_OUTDIR + "jurong_engineering_jobs_.csv"
+OUT_JURONG_ENGINEERING_REPORT = _ATS_OUTDIR + "jurong_engineering_report_.json"
+
+OUT_TOYO_ENGINEERING_CSV = _ATS_OUTDIR + "toyo_engineering_jobs_.csv"
+OUT_TOYO_ENGINEERING_REPORT = _ATS_OUTDIR + "toyo_engineering_report_.json"
 
 OUT_WORKDAY_CSV = _ATS_OUTDIR + "workday_jobs_.csv"
 OUT_WORKDAY_REPORT = _ATS_OUTDIR + "workday_report_.json"
@@ -467,6 +487,11 @@ def _build_groups(
     oracle_items = [it for it in items if pick_collector(it) == "oracle"]
     wsp_items = [it for it in items if pick_collector(it) == "wsp"]
     bertschi_items = [it for it in items if pick_collector(it) == "bertschi"]
+    vis_items = [it for it in items if pick_collector(it) == "vis"]
+    umc_items = [it for it in items if pick_collector(it) == "umc"]
+    katoen_natie_items = [it for it in items if pick_collector(it) == "katoen_natie"]
+    jurong_engineering_items = [it for it in items if pick_collector(it) == "jurong_engineering"]
+    toyo_engineering_items = [it for it in items if pick_collector(it) == "toyo_engineering"]
     workday_items = [it for it in items if pick_collector(it) == "workday"]
     phenom_items = [it for it in items if pick_collector(it) == "phenom"]
     successfactors_items = [it for it in items if pick_collector(it) == "successfactors"]
@@ -541,6 +566,41 @@ def _build_groups(
             collector=BertschiCollector(),
             out_csv=_out(OUT_BERTSCHI_CSV),
             out_report=_out(OUT_BERTSCHI_REPORT),
+        ),
+        AtsGroup(
+            ats_name="vis",
+            companies=vis_items,
+            collector=VisCollector(),
+            out_csv=_out(OUT_VIS_CSV),
+            out_report=_out(OUT_VIS_REPORT),
+        ),
+        AtsGroup(
+            ats_name="umc",
+            companies=umc_items,
+            collector=UmcCollector(),
+            out_csv=_out(OUT_UMC_CSV),
+            out_report=_out(OUT_UMC_REPORT),
+        ),
+        AtsGroup(
+            ats_name="katoen_natie",
+            companies=katoen_natie_items,
+            collector=KatoenNatieCollector(),
+            out_csv=_out(OUT_KATOEN_NATIE_CSV),
+            out_report=_out(OUT_KATOEN_NATIE_REPORT),
+        ),
+        AtsGroup(
+            ats_name="jurong_engineering",
+            companies=jurong_engineering_items,
+            collector=JurongEngineeringCollector(),
+            out_csv=_out(OUT_JURONG_ENGINEERING_CSV),
+            out_report=_out(OUT_JURONG_ENGINEERING_REPORT),
+        ),
+        AtsGroup(
+            ats_name="toyo_engineering",
+            companies=toyo_engineering_items,
+            collector=ToyoEngineeringCollector(),
+            out_csv=_out(OUT_TOYO_ENGINEERING_CSV),
+            out_report=_out(OUT_TOYO_ENGINEERING_REPORT),
         ),
         AtsGroup(
             ats_name="workday",
