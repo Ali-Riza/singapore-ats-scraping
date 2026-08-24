@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import unquote, urlparse, urlsplit
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 
@@ -11,290 +12,71 @@ from src.collectors.base import BaseCollector
 from src.core.models import CompanyItem, CollectResult, JobRecord
 
 
-APOLLO_MARKER = "window.SEEK_APOLLO_DATA ="
-DEFAULT_BASE_URL = "https://sg.jobstreet.com"
-DEFAULT_SITE_KEY = "SG-Main"
-V5_SEARCH_PATH = "/api/jobsearch/v5/search"
+_JOBSTREET_JSON_RE = re.compile(r"window\.SEEK_APOLLO_DATA\s*=\s*(\{.*?\});\s*\n", re.DOTALL)
 
 
-def parse_v5_job(item: Dict[str, Any], origin: str) -> Optional[Dict[str, Any]]:
-    return _parse_v5_job(item, origin)
+def _extract_jobstreet_payload(html: str) -> Tuple[Dict[str, Any], int]:
 
+    m = _JOBSTREET_JSON_RE.search(html)
+    if not m:
+        return {}, 0
 
-def scrape_company_page(
-    url: str,
-    *,
-    company: Optional[str] = None,
-    site_key: str = DEFAULT_SITE_KEY,
-    timeout: float = 30,
-    delay: float = 1,
-    max_pages: int = 100,
-    page_size: int = 30,
-) -> List[Dict[str, Any]]:
-    """Compatibility wrapper mirroring the working standalone scraper."""
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/126.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-SG,en;q=0.9",
-            "Accept": "application/json",
-        }
-    )
+    data = json.loads(m.group(1))
 
-    origin = _api_origin(url)
-    api_url = f"{origin}{V5_SEARCH_PATH}"
-    company_query = (company or "").strip() or _infer_company_query(url)
-    jobs_by_id: Dict[str, Dict[str, Any]] = {}
-
-    for page in range(1, max_pages + 1):
-        response = session.get(
-            api_url,
-            params={
-                "siteKey": site_key,
-                "keywords": company_query,
-                "pageSize": page_size,
-                "page": page,
-            },
-            timeout=timeout,
-        )
-        response.raise_for_status()
-
-        payload = response.json()
-        raw_jobs = payload.get("data") if isinstance(payload, dict) else None
-        if not isinstance(raw_jobs, list):
-            raise ValueError("Unexpected response from Jobstreet v5 search API")
-
-        new_jobs = 0
-        for item in raw_jobs:
-            if not isinstance(item, dict):
-                continue
-            job = parse_v5_job(item, origin)
-            if job is None:
-                continue
-            if job["job_id"] not in jobs_by_id:
-                new_jobs += 1
-            jobs_by_id[job["job_id"]] = job
-
-        if len(raw_jobs) < page_size or new_jobs == 0:
+    total = 0
+    for key, val in data.items():
+        if "jobSearchV6" in key and isinstance(val, dict):
+            total = int(val.get("totalCount", 0) or 0)
             break
-        if delay > 0:
-            import time
-            time.sleep(delay)
 
-    return list(jobs_by_id.values())
+    return data, total
 
 
-def _extract_apollo_data(html: str) -> Dict[str, Any]:
-    """Extract the JSON attached to window.SEEK_APOLLO_DATA."""
-    marker_position = html.find(APOLLO_MARKER)
-    if marker_position < 0:
-        raise ValueError("window.SEEK_APOLLO_DATA was not found in the HTML")
+def _jobs_from_payload(data: Dict[str, Any], careers_url: str) -> List[Dict[str, Any]]:
 
-    json_start = marker_position + len(APOLLO_MARKER)
-    json_text = html[json_start:].lstrip()
-    data, _ = json.JSONDecoder().raw_decode(json_text)
-    if not isinstance(data, dict):
-        raise ValueError("SEEK_APOLLO_DATA is not a JSON object")
-    return data
+    base = "https://" + (urlparse(careers_url).netloc or "sg.jobstreet.com")
 
-
-def _resolve_reference(value: Any, apollo: Dict[str, Any]) -> Any:
-    if isinstance(value, dict) and isinstance(value.get("__ref"), str):
-        return apollo.get(value["__ref"], {})
-    return value
-
-
-def _localized_value(data: Any, prefix: str) -> Any:
-    if not isinstance(data, dict):
-        return None
-    if prefix in data:
-        return data[prefix]
-    for key, value in data.items():
-        if key.startswith(f"{prefix}("):
-            return value
-    return None
-
-
-def _nested(data: Any, *keys: str) -> Any:
-    current = data
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
-def _search_responses(apollo: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
-    root_query = apollo.get("ROOT_QUERY")
-    query_cache = root_query if isinstance(root_query, dict) else apollo
-
-    for key, value in query_cache.items():
-        if not key.startswith("jobSearchV7(") or not isinstance(value, dict):
+    jobs: List[Dict[str, Any]] = []
+    for key, val in data.items():
+        if not isinstance(val, dict) or val.get("__typename") != "JobSearchV6Data":
             continue
-        jobs = _nested(value, "results", "jobs")
-        if isinstance(jobs, list):
-            yield value
 
+        job_id = str(val.get("id", "") or "")
+        title = str(val.get("title", "") or "")
+        locations = val.get("locations") or []
+        location = ""
+        if isinstance(locations, list) and locations:
+            loc0 = locations[0] or {}
+            if isinstance(loc0, dict):
+                location = str(loc0.get("label", "") or "")
 
-def _first_text(value: Any, *keys: str) -> Optional[str]:
-    current = value
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    if isinstance(current, str):
-        current = current.strip()
-        return current or None
-    return None
+        listing = val.get("listingDate") or {}
+        posted_date = ""
+        if isinstance(listing, dict):
+            dt = str(listing.get("dateTimeUtc", "") or "")
+            if dt:
+                posted_date = dt[:10]
 
+        job_url = f"{base}/job/{job_id}" if job_id else ""
 
-def _infer_company_query(url: str) -> str:
-    slug = unquote(urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1])
-    if slug.lower().endswith("-jobs"):
-        slug = slug[:-5]
-    company = " ".join(part for part in slug.replace("_", "-").split("-") if part)
-    if not company:
-        raise ValueError("Could not infer the company name from the URL")
-    return company
-
-
-def _api_origin(url: str) -> str:
-    parts = urlsplit(url)
-    if parts.scheme != "https" or not parts.netloc:
-        raise ValueError("Expected an https:// Jobstreet URL")
-    return f"{parts.scheme}://{parts.netloc}"
-
-
-def _parse_v5_job(item: Dict[str, Any], origin: str) -> Optional[Dict[str, Any]]:
-    job_id = str(item.get("id") or "").strip()
-    title = str(item.get("title") or "").strip()
-    if not job_id or not title:
-        return None
-
-    locations = item.get("locations") if isinstance(item.get("locations"), list) else []
-    location = locations[0] if locations and isinstance(locations[0], dict) else {}
-
-    arrangements: List[str] = []
-    arrangement_data = _nested(item, "workArrangements", "data") or []
-    for arrangement in arrangement_data:
-        label = _first_text(arrangement, "label", "text")
-        if label and label not in arrangements:
-            arrangements.append(label)
-
-    work_types = [
-        value.strip()
-        for value in (item.get("workTypes") or [])
-        if isinstance(value, str) and value.strip()
-    ]
-
-    bullet_values = item.get("bulletPoints") or item.get("sellingPoints") or []
-    if isinstance(bullet_values, dict):
-        bullet_values = bullet_values.get("data") or []
-    bullets: List[str] = []
-    for value in bullet_values if isinstance(bullet_values, list) else []:
-        if isinstance(value, str) and value.strip():
-            bullets.append(value.strip())
-        elif isinstance(value, dict):
-            text = value.get("text") or value.get("label")
-            if isinstance(text, str) and text.strip():
-                bullets.append(text.strip())
-
-    classifications: List[str] = []
-    for key in ("classification", "subClassification"):
-        value = item.get(key)
-        if isinstance(value, dict):
-            label = value.get("description") or value.get("label")
-        else:
-            label = value
-        if isinstance(label, str) and label.strip() and label.strip() not in classifications:
-            classifications.append(label.strip())
-
-    country_code = location.get("countryCode")
-    country = "Singapore" if country_code == "SG" else country_code
-    company = (
-        _first_text(item, "advertiser", "description")
-        or _first_text(item, "advertiser", "name")
-        or (item.get("companyName") if isinstance(item.get("companyName"), str) else None)
-    )
-
-    job_url = f"{origin}/job/{job_id}"
-    return {
-        "job_id": job_id,
-        "title": title,
-        "company": company,
-        "location": location.get("label"),
-        "country": country or "Singapore",
-        "categories": " | ".join(classifications),
-        "work_type": " | ".join(work_types),
-        "work_arrangement": " | ".join(arrangements),
-        "salary_min": None,
-        "salary_max": None,
-        "salary_currency": None,
-        "salary_period": None,
-        "salary_display": item.get("salaryLabel") or None,
-        "listed_at": item.get("listingDate"),
-        "summary": item.get("teaser") or item.get("abstract"),
-        "bullets": " | ".join(bullets),
-        "url": job_url,
-        "job_url": job_url,
-        "source": "jobstreet",
-        "careers_url": origin,
-    }
-
-
-def _parse_jobs_from_apollo_html(html: str) -> List[Dict[str, Any]]:
-    apollo = _extract_apollo_data(html)
-    jobs_by_id: Dict[str, Dict[str, Any]] = {}
-
-    for response in _search_responses(apollo):
-        for raw_job in _nested(response, "results", "jobs") or []:
-            if not isinstance(raw_job, dict):
-                continue
-            job_id = str(raw_job.get("id") or "").strip()
-            if not job_id:
-                continue
-
-            organisation = _resolve_reference(raw_job.get("organisation"), apollo)
-            location = _resolve_reference(raw_job.get("location"), apollo)
-            title = str(raw_job.get("title") or "").strip()
-            if not title:
-                continue
-
-            job_url = f"{DEFAULT_BASE_URL}/job/{job_id}"
-            parsed = {
-                "job_id": job_id,
+        jobs.append(
+            {
                 "job_title": title,
-                "location": _nested(location, "displayName", "text") or "",
-                "company": (
-                    _nested(raw_job, "advertiser", "name")
-                    or (organisation.get("name") if isinstance(organisation, dict) else None)
-                    or "",
-                ),
-                "posted_date": "",
+                "location": location,
+                "job_id": job_id,
+                "posted_date": posted_date,
                 "job_url": job_url,
-                "url": job_url,
-                "careers_url": DEFAULT_BASE_URL,
+                "careers_url": careers_url,
             }
+        )
 
-            listed_at = raw_job.get("listedAt") if isinstance(raw_job.get("listedAt"), dict) else {}
-            if isinstance(listed_at, dict):
-                dt = listed_at.get("dateTimeUtc")
-                if isinstance(dt, str):
-                    parsed["posted_date"] = dt[:10]
-
-            jobs_by_id[job_id] = parsed
-
-    return list(jobs_by_id.values())
+    return jobs
 
 
 @dataclass(frozen=True)
 class _JobStreetConfig:
-    page_size: int = 30
-    max_pages: int = 100
+    page_size: int = 32
+    max_pages: int = 50
 
 
 class JobStreetCompanyPageCollector(BaseCollector):
@@ -305,89 +87,127 @@ class JobStreetCompanyPageCollector(BaseCollector):
         self.cfg = cfg or _JobStreetConfig()
 
     def collect_raw(self, company: CompanyItem) -> CollectResult:
-        careers_url = company.careers_url or DEFAULT_BASE_URL
+
+        careers_url = company.careers_url
         session = requests.Session()
         session.headers.update(
             {
                 "User-Agent": (
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/126.0 Safari/537.36"
+                    "Chrome/120.0.0.0 Safari/537.36"
                 ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-SG,en;q=0.9",
-                "Accept": "application/json",
             }
         )
-
-        origin = _api_origin(careers_url)
-        api_url = f"{origin}{V5_SEARCH_PATH}"
-        company_query = (company.company or "").strip() or _infer_company_query(careers_url)
 
         raw_jobs: List[Dict[str, Any]] = []
         meta: Dict[str, Any] = {
             "pages": 0,
             "status_codes": [],
             "visited_urls": [],
-            "total_unique": 0,
-            "source": "jobstreet_v5_api",
+            "total_reported": None,
         }
 
-        jobs_by_id: Dict[str, Dict[str, Any]] = {}
+        total_reported: Optional[int] = None
+        page_num = 1
 
+        # 1) First try simple HTTP requests (fast path)
         try:
-            for page in range(1, self.cfg.max_pages + 1):
-                response = session.get(
-                    api_url,
-                    params={
-                        "siteKey": "SG-Main",
-                        "keywords": company_query,
-                        "pageSize": self.cfg.page_size,
-                        "page": page,
-                    },
-                    timeout=30,
-                )
-                meta["status_codes"].append(response.status_code)
-                meta["visited_urls"].append(response.url)
+            while page_num <= self.cfg.max_pages:
+                if page_num == 1:
+                    url = careers_url
+                else:
+                    sep = "&" if "?" in careers_url else "?"
+                    url = f"{careers_url}{sep}page={page_num}"
+
+                r = session.get(url, timeout=30)
+                meta["status_codes"].append(r.status_code)
+                meta["visited_urls"].append(url)
                 meta["pages"] += 1
-                response.raise_for_status()
+                r.raise_for_status()
 
-                payload = response.json()
-                raw_items = payload.get("data") if isinstance(payload, dict) else None
-                if not isinstance(raw_items, list):
+                data, total = _extract_jobstreet_payload(r.text)
+                if total_reported is None and total:
+                    total_reported = total
+                    meta["total_reported"] = total_reported
+
+                jobs_page = _jobs_from_payload(data, careers_url)
+                if not jobs_page:
                     break
 
-                new_jobs = 0
-                for item in raw_items:
-                    if not isinstance(item, dict):
-                        continue
-                    job = _parse_v5_job(item, origin)
-                    if job is None:
-                        continue
-                    if job["job_id"] not in jobs_by_id:
-                        new_jobs += 1
-                    jobs_by_id[job["job_id"]] = job
+                raw_jobs.extend(jobs_page)
 
-                if not raw_items or new_jobs == 0:
+                if total_reported is not None and len(raw_jobs) >= total_reported:
                     break
 
-                if len(raw_items) < self.cfg.page_size:
+                if len(jobs_page) < self.cfg.page_size:
                     break
 
-            raw_jobs = list(jobs_by_id.values())
-            meta["total_unique"] = len(raw_jobs)
+                page_num += 1
+        except Exception as e:  # e.g. 403/429/5xx etc.
+            meta["requests_error"] = str(e)
 
-        except Exception as exc:  # pragma: no cover - best-effort fallback
-            meta["error"] = str(exc)
-            meta["fallback_html_apollo"] = True
+        # 2) If the plain-requests path yielded nothing, fall back to Playwright
+        if not raw_jobs:
+            meta["fallback"] = "playwright"
             try:
-                html = requests.get(careers_url, timeout=30, headers={
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-                    "Accept-Language": "en-SG,en;q=0.9",
-                }).text
-                raw_jobs = _parse_jobs_from_apollo_html(html)
-                meta["total_unique"] = len(raw_jobs)
-            except Exception as fallback_exc:  # pragma: no cover
-                meta["fallback_error"] = str(fallback_exc)
+                from playwright.sync_api import sync_playwright  # type: ignore
+
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=True)
+                    context = browser.new_context(
+                        user_agent=(
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/146.0.0.0 Safari/537.36"
+                        ),
+                        locale="en-SG",
+                    )
+                    page = context.new_page()
+
+                    page_num = 1
+                    total_reported = None
+
+                    while page_num <= self.cfg.max_pages:
+                        if page_num == 1:
+                            url = careers_url
+                        else:
+                            sep = "&" if "?" in careers_url else "?"
+                            url = f"{careers_url}{sep}page={page_num}"
+
+                        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        page.wait_for_timeout(1500)
+                        html = page.content()
+                        meta["visited_urls"].append(url)
+
+                        data, total = _extract_jobstreet_payload(html)
+                        if total_reported is None and total:
+                            total_reported = total
+                            meta["total_reported"] = total_reported
+
+                        jobs_page = _jobs_from_payload(data, careers_url)
+                        if not jobs_page:
+                            break
+
+                        raw_jobs.extend(jobs_page)
+
+                        if total_reported is not None and len(raw_jobs) >= total_reported:
+                            break
+
+                        if len(jobs_page) < self.cfg.page_size:
+                            break
+
+                        page_num += 1
+
+                    context.close()
+                    browser.close()
+
+            except Exception as pe:  # pragma: no cover - best-effort fallback
+                meta["playwright_error"] = str(pe)
+
+        meta["total_raw"] = len(raw_jobs)
 
         return CollectResult(
             collector=self.name,
@@ -405,13 +225,11 @@ class JobStreetCompanyPageCollector(BaseCollector):
         return records
 
     def _map_one(self, raw: Dict[str, Any], result: CollectResult) -> JobRecord:
-        title = str(raw.get("job_title") or raw.get("title") or "").strip()
-        location = str(raw.get("location") or "").strip()
-        job_id = str(raw.get("job_id") or "").strip()
-        posted_date = str(raw.get("posted_date") or raw.get("listed_at") or "").strip()
-        if len(posted_date) > 10 and "T" in posted_date:
-            posted_date = posted_date[:10]
-        job_url = str(raw.get("job_url") or raw.get("url") or "").strip()
+        title = str(raw.get("job_title", "") or "").strip()
+        location = str(raw.get("location", "") or "").strip()
+        job_id = str(raw.get("job_id", "") or "").strip()
+        posted_date = str(raw.get("posted_date", "") or "").strip()
+        job_url = str(raw.get("job_url", "") or "").strip()
 
         return JobRecord(
             company=result.company,
