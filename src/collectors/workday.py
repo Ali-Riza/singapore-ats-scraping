@@ -350,6 +350,11 @@ def _parse_posted_on(text: str) -> Optional[str]:
     return None
 
 
+# Workday sites are optionally prefixed with a locale ("/en-US/professional").
+# Matches "en-US", "de", "zh-Hans" and the like, but not a site name.
+_LOCALE_SEGMENT_RE = re.compile(r"[a-z]{2}(?:-[A-Za-z]{2,4})?", re.IGNORECASE)
+
+
 def _derive_workday_urls(jobs_page_url: str) -> Tuple[str, str]:
     """Derive Workday JSON endpoint + public base URL from a jobs-page URL."""
 
@@ -375,13 +380,15 @@ def _derive_workday_urls(jobs_page_url: str) -> Tuple[str, str]:
     # Case 1: https://{tenant}.wd?.myworkdayjobs.com[/en-US]/{site}...
     tenant = host.split(".")[0]
 
-    # Determine site and public base URL
-    if len(path_parts) >= 2 and path_parts[0].lower() == "en-us":
+    # Determine site and public base URL. The optional locale segment is
+    # dropped: it does not identify a different job, so keeping it would make
+    # the same posting look unique depending on which input URL found it
+    # (/en-US/professional/job/X vs /professional/job/X).
+    if len(path_parts) >= 2 and _LOCALE_SEGMENT_RE.fullmatch(path_parts[0]):
         site = path_parts[1]
-        public_base = f"{u.scheme}://{host}/en-US/{site}"
     else:
         site = path_parts[0] if path_parts else ""
-        public_base = f"{u.scheme}://{host}/{site}" if site else f"{u.scheme}://{host}"
+    public_base = f"{u.scheme}://{host}/{site}" if site else f"{u.scheme}://{host}"
 
     endpoint = f"{u.scheme}://{host}/wday/cxs/{tenant}/{site}/jobs"
     return endpoint, public_base
