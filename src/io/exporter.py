@@ -19,6 +19,8 @@ from src.core.models import JobRecord
 
 CSV_FIELDS: List[str] = [
     "company",
+    "industry",
+    "sub_industry",
     "job_title",
     "location",
     "job_id",

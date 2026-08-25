@@ -12,6 +12,8 @@ class CompanyItem:
     category:Optional[str]
     website: Optional[str]
     row_number:int
+    industry: Optional[str] = None
+    sub_industry: Optional[str] = None
 
 @dataclass
 class CollectResult:
@@ -66,6 +68,8 @@ class JobRecord:
     posted_date: str
     job_url: str
 
-    source: str = ""          
-    careers_url: str = ""     
-    raw: Optional[Dict[str, Any]] = None 
+    source: str = ""
+    careers_url: str = ""
+    raw: Optional[Dict[str, Any]] = None
+    industry: str = ""
+    sub_industry: str = "" 

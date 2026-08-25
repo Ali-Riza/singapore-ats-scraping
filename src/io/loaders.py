@@ -49,6 +49,8 @@ COL_JOBS_SG = "Jobs Page (Singapore)"
 COL_ATS = "ats_new_norm"
 COL_CATEGORY = "Category"
 COL_WEBSITE = "Website"
+COL_INDUSTRY = "Industry"
+COL_SUB_INDUSTRY = "Sub-Industry"
 
 REQUIRED_COLS = [COL_COMPANY, COL_JOBS_SG]
 
@@ -103,6 +105,8 @@ def load_companies(path: str) -> List[CompanyItem]:
             category=category,
             website=website,
             row_number=row_number,
+            industry=_clean_str(row.get(COL_INDUSTRY)),
+            sub_industry=_clean_str(row.get(COL_SUB_INDUSTRY)),
         )
         items.append(item)
 

@@ -1408,10 +1408,16 @@ def _collect_and_map(company, collector):
         return None
     records = collector.map_to_records(res)
     # Always take company name from input (Excel) instead of any scraped/ATS-provided company field.
+    # Industry/sub-industry only exist in the input, so they are carried over here too.
     input_company = (getattr(company, "company", None) or "").strip()
+    industry = (getattr(company, "industry", None) or "").strip()
+    sub_industry = (getattr(company, "sub_industry", None) or "").strip()
     if not input_company:
-        return records
-    return [replace(r, company=input_company) for r in records]
+        return [replace(r, industry=industry, sub_industry=sub_industry) for r in records]
+    return [
+        replace(r, company=input_company, industry=industry, sub_industry=sub_industry)
+        for r in records
+    ]
 
 
 if __name__ == "__main__":
