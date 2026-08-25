@@ -32,6 +32,25 @@ _LEGAL_FORM_TOKENS = frozenset(
 )
 
 
+# Words that merely qualify an entity within one company: a legal vehicle, a
+# region, or the industry the company is already known for. An advertiser may
+# add or drop these and still be the same employer. Words naming a distinct
+# line of business ("chemicals", "elastomers") are deliberately absent, since
+# those separate sibling companies in a group.
+_SHARED_GROUP_QUALIFIERS = frozenset(
+    {
+        "semiconductors", "semiconductor", "technologies", "technology",
+        "services", "service", "solutions", "systems", "energy", "industries",
+        "industrial", "manufacturing", "operations", "enterprise", "enterprises",
+        "offshore", "marine", "engineering", "consulting", "trading",
+        "east", "west", "north", "south", "central", "far", "middle",
+        "europe", "america", "americas", "africa", "china", "japan", "korea",
+        "malaysia", "indonesia", "thailand", "vietnam", "philippines", "india",
+        "sdn", "bhd", "kk", "gk", "srl", "spa", "as", "ab", "oy", "aps",
+    }
+)
+
+
 def _company_tokens(name: str) -> frozenset:
     """Reduce a company name to its distinctive tokens for fuzzy comparison."""
     cleaned = re.sub(r"[^0-9a-z]+", " ", str(name or "").casefold())
@@ -45,6 +64,11 @@ def advertiser_matches_company(advertiser: str, company: str) -> bool:
 
     Unknown advertisers are accepted: a missing field is not evidence of a
     mismatch, and dropping those rows would lose legitimate postings.
+
+    Sharing one distinctive token is not enough. Sister companies in a group
+    cross-list each other's postings, and "Mitsui & Co." -> {mitsui} against
+    "Mitsui Chemicals" -> {chemicals, mitsui} would otherwise match in both
+    directions, leaving the same job filed under both employers.
     """
     adv_tokens = _company_tokens(advertiser)
     if not adv_tokens:
@@ -54,14 +78,18 @@ def advertiser_matches_company(advertiser: str, company: str) -> bool:
     if not want_tokens:
         return True
 
-    # Either side may carry extra qualifiers ("Micron Semiconductors Asia" vs
-    # "Micron Technology"), so a subset in either direction counts as a match.
-    if adv_tokens <= want_tokens or want_tokens <= adv_tokens:
+    if adv_tokens == want_tokens:
         return True
 
-    # Otherwise require the rarer case of a shared distinctive token, which
-    # covers renamed entities ("Seatrium" / "Seatrium Offshore").
-    return bool(adv_tokens & want_tokens)
+    # Whichever side is more specific, the extra words decide. A qualifier that
+    # only narrows a region or business line ("Micron Semiconductors" vs
+    # "Micron Technology") still denotes the same employer; a different line of
+    # business ("Chemicals" vs bare "Mitsui") denotes a sibling company.
+    if not adv_tokens & want_tokens:
+        return False
+
+    extra = adv_tokens ^ want_tokens
+    return extra <= _SHARED_GROUP_QUALIFIERS
 
 
 def parse_v5_job(item: Dict[str, Any], origin: str) -> Optional[Dict[str, Any]]:
