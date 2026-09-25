@@ -70,6 +70,18 @@ def advertiser_matches_company(advertiser: str, company: str) -> bool:
     "Mitsui Chemicals" -> {chemicals, mitsui} would otherwise match in both
     directions, leaving the same job filed under both employers.
     """
+    advertiser_key = advertiser.strip().casefold()
+    company_key = company.strip().casefold()
+
+    if company_key == "sinopec" and re.match(r"^sinopec\b", advertiser_key):
+        return True
+    if company_key == "utac" and re.search(r"\(utac\)\s*$", advertiser_key):
+        return True
+    if company_key == "wuxi biologics" and advertiser_key.startswith("wuxi biologics "):
+        return True
+    if company_key == "wuxi sta" and advertiser_key.startswith("wuxi apptec singapore"):
+        return True
+    
     adv_tokens = _company_tokens(advertiser)
     if not adv_tokens:
         return True
@@ -123,6 +135,10 @@ def scrape_company_page(
     origin = _api_origin(url)
     api_url = f"{origin}{V5_SEARCH_PATH}"
     company_query = (company or "").strip() or _infer_company_query(url)
+
+    if company_query.casefold() == "wuxi sta":
+        company_query = "WuXi AppTec Singapore Pte Ltd"
+
     jobs_by_id: Dict[str, Dict[str, Any]] = {}
 
     for page in range(1, max_pages + 1):
@@ -396,7 +412,10 @@ class JobStreetCompanyPageCollector(BaseCollector):
 
         origin = _api_origin(careers_url)
         api_url = f"{origin}{V5_SEARCH_PATH}"
+        
         company_query = (company.company or "").strip() or _infer_company_query(careers_url)
+        if company_query.casefold() == "wuxi sta":
+            company_query = "WuXi AppTec Singapore Pte Ltd"
 
         raw_jobs: List[Dict[str, Any]] = []
         meta: Dict[str, Any] = {

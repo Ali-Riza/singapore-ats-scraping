@@ -1,4 +1,6 @@
 from __future__ import annotations
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
+from playwright.sync_api import sync_playwright
 
 import json
 import re
@@ -18,6 +20,63 @@ from src.core.models import CompanyItem, CollectResult, JobRecord
 def _clean_text(s: str) -> str:
     return " ".join((s or "").split()).strip()
 
+def _collect_johnson_html(session: requests.Session) -> List[Dict[str, Any]]:
+    jobs: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        for page_number in range(1, 100):
+            query = urlencode({
+                "production_JCI_jobs[refinementList][locations_list][0]": "Singapore",
+                "production_JCI_jobs[page]": page_number,
+            })
+            page.goto(
+                f"https://jobs.johnsoncontrols.com/job-search?{query}",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+
+            try:
+                page.wait_for_selector('a[href*="/job/WD"]', timeout=15000)
+            except PlaywrightTimeout:
+                break
+
+            soup = BeautifulSoup(page.content(), "html.parser")
+            added = 0
+
+            for anchor in soup.select('a[href*="/job/WD"]'):
+                href = str(anchor.get("href") or "")
+                match = re.search(r"/job/(WD\d+)", href)
+                if not match or match.group(1) in seen:
+                    continue
+
+                job_id = match.group(1)
+                title = _clean_text(anchor.get_text(" ", strip=True))
+                title = re.sub(
+                    r"\s+Singapore,\s*Singapore\s+Apply$",
+                    "",
+                    title,
+                )
+
+                seen.add(job_id)
+                added += 1
+                jobs.append({
+                    "job_id": job_id,
+                    "title": title,
+                    "location": "Singapore, Singapore",
+                    "posted_date": "",
+                    "job_url": f"https://jobs.johnsoncontrols.com/job/{job_id}",
+                })
+
+            if added == 0:
+                break
+
+        browser.close()
+
+    return jobs
 
 def _pick(d: Dict[str, Any], keys: Sequence[str], default: Any = None) -> Any:
     for k in keys:
@@ -285,6 +344,20 @@ class AlgoliaCollector(BaseCollector):
                 "x-algolia-application-id": cfg.app_id,
                 "x-algolia-api-key": cfg.api_key,
             }
+
+            if (company.company or "").strip().casefold() == "johnson controls":
+                session.headers.update(headers)
+                raw_jobs = _collect_johnson_html(session)
+                meta["pages"] = (len(raw_jobs) + 19) // 20
+                meta["total_raw"] = len(raw_jobs)
+                return CollectResult(
+                    collector=self.name,
+                    company=company.company,
+                    careers_url=company.careers_url,
+                    raw_jobs=raw_jobs,
+                    meta=meta,
+                    error=None,
+                )
 
             seen_ids: Set[str] = set()
 

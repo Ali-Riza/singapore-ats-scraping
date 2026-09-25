@@ -33,12 +33,16 @@ def _to_iso_date(v: str) -> str:
 
 def _parse_jobs(html: str) -> List[Dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
-    table = soup.select_one("div.iCIMS_JobsTable")
-    if not table:
-        return []
+    anchors = soup.select("div.iCIMS_JobsTable a.iCIMS_Anchor")
+    if not anchors:
+        anchors = [
+            anchor
+            for anchor in soup.select("a[href]")
+            if re.search(r"/jobs/\d+/.+/job(?:\?|$)", str(anchor.get("href", "")))
+        ]
 
     jobs: List[Dict[str, Any]] = []
-    for anchor in table.select("a.iCIMS_Anchor"):
+    for anchor in anchors:
         raw_title = _clean(anchor.get_text(" ", strip=True))
         if not raw_title:
             continue
@@ -59,8 +63,8 @@ def _parse_jobs(html: str) -> List[Dict[str, Any]]:
             .replace("?in_iframe=1", "")
         )
 
-        parts = [p for p in href.replace(_ICIMS_BASE, "").split("/") if p]
-        job_id = parts[1] if len(parts) > 1 else (parts[0] if parts else "")
+        match = re.search(r"/jobs/(\d+)/", href)
+        job_id = match.group(1) if match else ""
 
         row = anchor.find_parent("div", class_="iCIMS_JobHeaderGroup") or anchor.find_parent("div")
         location = ""
@@ -122,30 +126,23 @@ class IcimsCollector(BaseCollector):
                 )
                 page = context.new_page()
 
-                page.goto(company.careers_url, wait_until="networkidle", timeout=30000)
+                page.goto(company.careers_url, wait_until="domcontentloaded", timeout=30000)
+                
+
                 page.wait_for_timeout(1500)
 
-                iframe = None
-                for f in page.frames:
-                    if "in_iframe=1" in f.url:
-                        iframe = f
-                        break
-
-                if iframe is None:
-                    browser.close()
-                    return CollectResult(
-                        collector=self.name,
-                        company=company.company,
-                        careers_url=company.careers_url,
-                        raw_jobs=[],
-                        meta=meta,
-                        error="iCIMS iframe not found",
-                    )
+                iframe = next(
+                    (frame for frame in page.frames if "in_iframe=1" in frame.url),
+                    page.main_frame,
+                )
 
                 page_num = 1
                 while True:
                     try:
-                        iframe.wait_for_selector("div.iCIMS_JobsTable a.iCIMS_Anchor", timeout=15000)
+                        iframe.wait_for_selector(
+                            'div.iCIMS_JobsTable a.iCIMS_Anchor, a[href*="/jobs/"][href*="/job?"]',
+                            timeout=15000,
+                        )
                     except PlaywrightTimeout:
                         break
 
@@ -160,16 +157,13 @@ class IcimsCollector(BaseCollector):
 
                     page_num += 1
                     next_url = f"{company.careers_url}{'&' if '?' in company.careers_url else '?'}mobile=false&width=1279&page={page_num}"
-                    page.goto(next_url, wait_until="networkidle", timeout=30000)
+                    page.goto(next_url, wait_until="domcontentloaded", timeout=30000)
                     page.wait_for_timeout(1200)
 
-                    iframe = None
-                    for f in page.frames:
-                        if "in_iframe=1" in f.url:
-                            iframe = f
-                            break
-                    if iframe is None:
-                        break
+                    iframe = next(
+                        (frame for frame in page.frames if "in_iframe=1" in frame.url),
+                        page.main_frame,
+                    )
 
                 context.close()
                 browser.close()
