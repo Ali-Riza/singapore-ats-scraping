@@ -140,4 +140,14 @@ def pick_collector(item: CompanyItem) -> str:
     if ats == "sonar_ats":
         # Sonar-ATS-based site handled by the Toyo Engineering collector.
         return "toyo_engineering"
+    if ats == "teamtailor":
+        return "teamtailor_jsonld"
+    if ats == "teamtailor_jsonld":
+        return "teamtailor_jsonld"
+    if ats == "racks_central_html":
+        return "racks_central_html"
+    if ats == "darwinbox":
+        return "darwinbox_api"
+    if ats == "darwinbox_api":
+        return "darwinbox_api"
     return "skip"

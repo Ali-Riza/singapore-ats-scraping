@@ -3,6 +3,7 @@ from __future__ import annotations
 import html as html_lib
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urljoin
 
@@ -73,7 +74,7 @@ def _parse_job_detail(html: str) -> tuple[str, str]:
 
     location = ""
     m = re.search(
-        r'class=\"[^\"]*location[^\"]*\"[^>]*>(.*?)</',
+        r'class="[^"]*location[^"]*"[^>]*>.*?<span[^>]*>(.*?)</span>',
         html,
         flags=re.IGNORECASE | re.DOTALL,
     )
@@ -85,7 +86,27 @@ def _parse_job_detail(html: str) -> tuple[str, str]:
 
 def _looks_singapore(job_title: str, location: str, job_url: str) -> bool:
     hay = " ".join([job_title or "", location or "", job_url or ""]).lower()
-    return "singapore" in hay or "\bsg\b" in hay
+    return bool(re.search(r"\bsingapore\b|\bsg\b", hay, re.IGNORECASE))
+
+
+def _fetch_detail(
+    careers_url: str,
+    path: str,
+) -> Dict[str, str]:
+    job_url = path if path.startswith("http") else urljoin(careers_url, path)
+    job_id = _guess_job_id_from_path(job_url)
+    try:
+        with requests.Session() as session:
+            detail_resp = _get_with_retries(session, job_url)
+        title, location = _parse_job_detail(detail_resp.text)
+    except Exception:
+        title, location = "", ""
+    return {
+        "job_id": job_id,
+        "title": title,
+        "location": location,
+        "job_url": job_url,
+    }
 
 
 class BreezyPortalCollector(BaseCollector):
@@ -106,26 +127,27 @@ class BreezyPortalCollector(BaseCollector):
             paths = _extract_position_paths(resp.text)
             meta["discovered_links"] = len(paths)
 
-            for p in paths:
-                job_url = p if p.startswith("http") else urljoin(careers_url, p)
-                job_id = _guess_job_id_from_path(job_url)
+            max_workers = min(16, len(paths)) or 1
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(_fetch_detail, careers_url, path)
+                    for path in paths
+                ]
+                details = [future.result() for future in as_completed(futures)]
 
-                try:
-                    detail_resp = _get_with_retries(session, job_url)
-                    title, location = _parse_job_detail(detail_resp.text)
-                except Exception:
-                    title, location = "", ""
-
-                if not _looks_singapore(title, location, job_url):
+            for detail in details:
+                if not _looks_singapore(
+                    detail["title"], detail["location"], detail["job_url"]
+                ):
                     continue
 
                 raw_jobs.append(
                     {
-                        "job_id": job_id,
-                        "title": title,
-                        "location": location,
+                        "job_id": detail["job_id"],
+                        "title": detail["title"],
+                        "location": detail["location"],
                         "posted_date": "",
-                        "job_url": job_url,
+                        "job_url": detail["job_url"],
                     }
                 )
 
