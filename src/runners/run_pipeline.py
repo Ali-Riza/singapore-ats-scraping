@@ -217,6 +217,10 @@ from src.collectors.arup_selectminds import ArupSelectMindsCollector
 from src.collectors.enermech_workable import EnermechWorkableCollector
 from src.collectors.saipem_ncore import SaipemNcoreCollector
 
+from src.collectors.teamtailor_jsonld import TeamtailorJsonLdCollector
+from src.collectors.racks_central_html import RacksCentralHtmlCollector
+from src.collectors.darwinbox_api import DarwinboxApiCollector
+
 from src.core.normalize import normalize_records  # Normalize JobRecord fields
 from src.core.validators import validate_records  # Validate JobRecord fields
 from src.core.dedupe import dedupe_records  # Dedupe JobRecord list
@@ -544,6 +548,9 @@ def _build_groups(
     sitefinity_items = [it for it in items if pick_collector(it) == "sitefinity"]
     enermech_workable_items = [it for it in items if pick_collector(it) == "enermech_workable"]
     saipem_ncore_items = [it for it in items if pick_collector(it) == "saipem_ncore"]
+    teamtailor_jsonld_items = [it for it in items if pick_collector(it) == "teamtailor_jsonld"]
+    racks_central_html_items = [it for it in items if pick_collector(it) == "racks_central_html"]
+    darwinbox_api_items = [it for it in items if pick_collector(it) == "darwinbox_api"]
 
     groups: list[AtsGroup] = [
         AtsGroup(
@@ -925,6 +932,27 @@ def _build_groups(
             out_csv=_out(_ATS_OUTDIR + "saipem_ncore_jobs_batch2.csv"),
             out_report=_out(_ATS_OUTDIR + "saipem_ncore_report_batch2.json"),
         ),
+        AtsGroup(
+            ats_name="teamtailor_jsonld",
+            companies=teamtailor_jsonld_items,
+            collector=TeamtailorJsonLdCollector(),
+            out_csv=_out(_ATS_OUTDIR + "teamtailor_jsonld_jobs_.csv"),
+            out_report=_out(_ATS_OUTDIR + "teamtailor_jsonld_report_batch2.json"),
+        ),
+        AtsGroup(
+            ats_name="racks_central_html",
+            companies=racks_central_html_items,
+            collector=RacksCentralHtmlCollector(),
+            out_csv=_out(_ATS_OUTDIR + "racks_central_html_jobs_.csv"),
+            out_report=_out(_ATS_OUTDIR + "racks_central_html_report_batch2.json"),
+        ),
+        AtsGroup(
+            ats_name="darwinbox_api",
+            companies=darwinbox_api_items,
+            collector=DarwinboxApiCollector(),
+            out_csv=_out(_ATS_OUTDIR + "darwinbox_api_jobs_.csv"),
+            out_report=_out(_ATS_OUTDIR + "darwinbox_api_report_batch2.json"),
+        ),
     ]
 
     return groups
@@ -957,6 +985,8 @@ def main(argv: list[str] | None = None) -> None:
     use_cache = True
     cache_dir = "data/cache"
     cache_ttl = 900
+    # A collection pass performs real network requests. Repeating it here
+    # triples runtime and can trigger rate limits without improving results.
     passes = 3
 
     priority = DEFAULT_PRIORITY_ATS
@@ -1207,7 +1237,7 @@ def run_one_ats(
         setattr(collector, "cache_dir", effective_cache_dir)
         setattr(collector, "cache_ttl", cache_ttl)
     except Exception:
-        pass
+        logger.warning("Collection failed for %s", getattr(company, "company", "unknown"))
 
     # Collect and normalize job records from all companies
     normalized_job_records = []
@@ -1233,7 +1263,7 @@ def run_one_ats(
                     normalized = normalize_records(mapped)
                     normalized_job_records.extend(normalized)
             except Exception:
-                logger.warning("Collection failed for %s", getattr(company, "company", "unknown"))
+                pass
             finally:
                 if progress is not None:
                     progress.update(1)
@@ -1422,4 +1452,3 @@ def _collect_and_map(company, collector):
 
 if __name__ == "__main__":
     main()
-
