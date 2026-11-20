@@ -43,13 +43,46 @@ fi
 
 
 echo
+echo "Preparing virtual environment (.venv)..."
+# Homebrew-Python verbietet pip-Installationen ins System (PEP 668).
+# Deshalb laeuft alles in einer eigenen .venv im Projektordner.
+# Bevorzugt eine bewaehrte Python-Version, weil sehr neue Versionen
+# fuer gepinnte Pakete (pandas, lxml) oft noch keine fertigen Wheels haben.
+pick_python() {
+for cand in python3.13 python3.12 python3.11 python3; do
+if command -v "$cand" >/dev/null 2>&1; then
+echo "$cand"
+return 0
+fi
+done
+return 1
+}
+
+# Vorhandene .venv nur verwenden, wenn sie noch funktioniert
+# (nach einem Homebrew-Update kann ihr Python verschwunden sein).
+if [ -d ".venv" ] && ! .venv/bin/python -c "import sys" >/dev/null 2>&1; then
+echo "Existing .venv is broken, recreating it..."
+rm -rf .venv
+fi
+
+if [ ! -d ".venv" ]; then
+BASE_PY="$(pick_python)" || { echo "No suitable Python found."; exit 1; }
+echo "Creating .venv with $BASE_PY ($("$BASE_PY" --version))"
+"$BASE_PY" -m venv .venv || { echo "Creating .venv failed"; exit 1; }
+fi
+
+PY=".venv/bin/python"
+echo "Using $("$PY" --version) from .venv"
+
+echo
 echo "Installing dependencies..."
-python3 -m pip install -r requirements.txt || { echo "pip install failed"; exit 1; }
+"$PY" -m pip install --upgrade pip >/dev/null 2>&1 || true
+"$PY" -m pip install -r requirements.txt || { echo "pip install failed"; exit 1; }
 
 
 echo
 echo "Installing Playwright Chromium..."
-python3 -m playwright install chromium || { echo "Playwright install failed"; exit 1; }
+"$PY" -m playwright install chromium || { echo "Playwright install failed"; exit 1; }
 
 
 echo
@@ -75,7 +108,7 @@ fi
 
 echo
 echo "Running script with input: $INPUT_FILE"
-python3 -m src.runners.run_pipeline --input "$INPUT_FILE" || { echo "Script failed"; exit 1; }
+"$PY" -m src.runners.run_pipeline --input "$INPUT_FILE" || { echo "Script failed"; exit 1; }
 
 
 echo
