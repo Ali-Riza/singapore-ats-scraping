@@ -1088,7 +1088,7 @@ def main(argv: list[str] | None = None) -> None:
                             ]
                             for c in zero_vacancy_companies:
                                 if c.company not in all_zero_vacancy_companies_set:
-                                    all_zero_vacancy_companies.append((c.company, c.careers_url))
+                                    all_zero_vacancy_companies.append((c.company, c.careers_url, type(group.collector).__name__))
                                     all_zero_vacancy_companies_set.add(c.company)
                     except Exception:
                         logger.exception("ATS group failed (%s) during %s", group.ats_name, pass_label)
@@ -1106,9 +1106,9 @@ def main(argv: list[str] | None = None) -> None:
     import csv
     with open(out_zero_vacancies, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["company", "careers_url"])
-        for name, url in all_zero_vacancy_companies:
-            writer.writerow([name, url])
+        writer.writerow(["company", "careers_url", "collector"])
+        for name, url, collector in all_zero_vacancy_companies:
+            writer.writerow([name, url, collector])
 
     width = shutil.get_terminal_size(fallback=(80, 20)).columns
     summary_line = "-" * max(20, width)
