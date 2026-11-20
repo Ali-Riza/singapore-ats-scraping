@@ -147,6 +147,7 @@ try:
 
     dataclass = _dataclasses.dataclass  # type: ignore[attr-defined]
     replace = _dataclasses.replace  # type: ignore[attr-defined]
+    field = _dataclasses.field  # type: ignore[attr-defined]
 except Exception as exc:  # pragma: no cover
     raise RuntimeError(
         "Your Python stdlib module 'dataclasses' is missing/broken (no 'dataclass' / 'replace'). "
@@ -444,6 +445,8 @@ class AtsRunSummary:
     total_records: int
     status_counts: Counter
     duration_seconds: float
+    # company -> error message, for companies whose collection failed
+    company_errors: dict[str, str] = field(default_factory=dict)
 
 
 def _parse_csv_list(value: str | None) -> list[str]:
@@ -987,7 +990,7 @@ def main(argv: list[str] | None = None) -> None:
     cache_ttl = 900
     # A collection pass performs real network requests. Repeating it here
     # triples runtime and can trigger rate limits without improving results.
-    passes = 3
+    passes = 1
 
     priority = DEFAULT_PRIORITY_ATS
 
@@ -1088,10 +1091,27 @@ def main(argv: list[str] | None = None) -> None:
                             ]
                             for c in zero_vacancy_companies:
                                 if c.company not in all_zero_vacancy_companies_set:
-                                    all_zero_vacancy_companies.append((c.company, c.careers_url, type(group.collector).__name__))
+                                    all_zero_vacancy_companies.append((
+                                        c.company,
+                                        c.careers_url,
+                                        type(group.collector).__name__,
+                                        summary.company_errors.get(c.company, ""),
+                                    ))
                                     all_zero_vacancy_companies_set.add(c.company)
-                    except Exception:
+                    except Exception as exc:
                         logger.exception("ATS group failed (%s) during %s", group.ats_name, pass_label)
+                        # The whole group crashed: list its companies with the error
+                        # instead of silently leaving them out.
+                        if pass_index == passes - 1:
+                            for c in group.companies:
+                                if c.company not in all_zero_vacancy_companies_set:
+                                    all_zero_vacancy_companies.append((
+                                        c.company,
+                                        c.careers_url,
+                                        type(group.collector).__name__,
+                                        f"ATS group failed: {type(exc).__name__}: {exc}",
+                                    ))
+                                    all_zero_vacancy_companies_set.add(c.company)
 
             pass_elapsed = time.perf_counter() - pass_start
             tqdm.write(f"Completed {pass_label} in {pass_elapsed:.1f}s")
@@ -1106,9 +1126,11 @@ def main(argv: list[str] | None = None) -> None:
     import csv
     with open(out_zero_vacancies, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["company", "careers_url", "collector"])
-        for name, url, collector in all_zero_vacancy_companies:
-            writer.writerow([name, url, collector])
+        # error empty -> collection succeeded and found no jobs;
+        # error set   -> collection failed, so the real job count is unknown.
+        writer.writerow(["company", "careers_url", "collector", "error"])
+        for name, url, collector, error in all_zero_vacancy_companies:
+            writer.writerow([name, url, collector, error])
 
     width = shutil.get_terminal_size(fallback=(80, 20)).columns
     summary_line = "-" * max(20, width)
@@ -1241,6 +1263,7 @@ def run_one_ats(
 
     # Collect and normalize job records from all companies
     normalized_job_records = []
+    company_errors: dict[str, str] = {}
 
     default_company_workers = max(4, (os.cpu_count() or 4) * 2)
     pool_size = company_workers if company_workers and company_workers > 0 else default_company_workers
@@ -1258,12 +1281,14 @@ def run_one_ats(
         for future in as_completed(futures):
             company = futures[future]
             try:
-                mapped = future.result()
+                mapped, error = future.result()
+                if error:
+                    company_errors[company.company] = error
                 if mapped:
                     normalized = normalize_records(mapped)
                     normalized_job_records.extend(normalized)
-            except Exception:
-                pass
+            except Exception as exc:
+                company_errors[company.company] = f"{type(exc).__name__}: {exc}"
             finally:
                 if progress is not None:
                     progress.update(1)
@@ -1328,6 +1353,7 @@ def run_one_ats(
             total_records=len(records_after_dedupe),
             status_counts=status_counts,
             duration_seconds=time.perf_counter() - start_time,
+            company_errors=company_errors,
         )
 
     # --- Statuslogik: previous.csv vs current.csv ---
@@ -1428,14 +1454,15 @@ def run_one_ats(
         total_records=len(records_after_dedupe),
         status_counts=status_counts,
         duration_seconds=time.perf_counter() - start_time,
+        company_errors=company_errors,
     )
 
 
 def _collect_and_map(company, collector):
-    """Helper to collect and map for one company."""
+    """Collect and map one company. Returns (records, error); error is None on success."""
     res = collector.collect_raw(company)
     if res.error:
-        return None
+        return [], res.error
     records = collector.map_to_records(res)
     # Always take company name from input (Excel) instead of any scraped/ATS-provided company field.
     # Industry/sub-industry only exist in the input, so they are carried over here too.
@@ -1443,11 +1470,11 @@ def _collect_and_map(company, collector):
     industry = (getattr(company, "industry", None) or "").strip()
     sub_industry = (getattr(company, "sub_industry", None) or "").strip()
     if not input_company:
-        return [replace(r, industry=industry, sub_industry=sub_industry) for r in records]
+        return [replace(r, industry=industry, sub_industry=sub_industry) for r in records], None
     return [
         replace(r, company=input_company, industry=industry, sub_industry=sub_industry)
         for r in records
-    ]
+    ], None
 
 
 if __name__ == "__main__":
