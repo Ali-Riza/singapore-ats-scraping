@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from urllib.parse import urlparse  # Parses career URLs to extract Workday endpoints
 import requests  # HTTP client for calling Workday JSON APIs
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from src.collectors.base import BaseCollector  # Abstract base class that defines collector interface
 from src.core.models import CompanyItem, CollectResult, JobRecord  # Data models for company info, scraping results, and job records
@@ -34,6 +36,28 @@ _GERMAN_DAYS_PATTERN = re.compile(r"vor\s+(\d+)\s+tag")
 _GERMAN_DAYS_PLUS_PATTERN = re.compile(r"vor\s+mehr\s+als\s+(\d+)\s+tag")
 _EXTRACT_ID_FROM_PATH = re.compile(r"_(\d+)(?:-|$)")
 _EXTRACT_ID_FROM_PATH_R = re.compile(r"_(R-\d+)(?:-|$)")
+
+# Workday throttles per client IP across all tenants and sends no Retry-After,
+# so short retries just hit the block again. Waits grow as 0, 10, 20, 40, 80s
+# (urllib3 retries the first attempt immediately), plus up to 3s jitter so
+# parallel threads don't retry in lockstep.
+_WORKDAY_RETRY = Retry(
+    total=5,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=frozenset({"GET", "POST"}),  # Workday search is a POST
+    backoff_factor=5,
+    backoff_jitter=3,
+    respect_retry_after_header=True,
+    raise_on_status=False,  # hand back the last response so raise_for_status() reports it
+)
+
+
+def _make_session() -> requests.Session:
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=_WORKDAY_RETRY)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 class WorkdayCollector(BaseCollector):
     """ Collector for Workday-based careers sites."""
@@ -159,8 +183,8 @@ class WorkdayCollector(BaseCollector):
             # Parse the careers URL to extract two key URLs (one for API, one for public site):
             endpoint, public_base = _derive_workday_urls(resolved_url)
 
-            # Start session in order to reuse HTTP connections
-            session = requests.Session()
+            # Session reuses HTTP connections and retries 429/5xx with backoff
+            session = _make_session()
 
             started_at = time.monotonic()
 

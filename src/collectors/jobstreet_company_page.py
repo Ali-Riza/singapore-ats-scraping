@@ -489,7 +489,9 @@ class JobStreetCompanyPageCollector(BaseCollector):
             careers_url=company.careers_url,
             raw_jobs=raw_jobs,
             meta=meta,
-            error=None,
+            # Only a failed fallback means we really have no data; a failed API
+            # call that the HTML fallback recovered from is not an error.
+            error=meta.get("fallback_error"),
         )
 
     def map_to_records(self, result: CollectResult) -> List[JobRecord]:
